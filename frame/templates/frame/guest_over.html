@@ -1,0 +1,21 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Thanks for staying</title>
+<link rel="stylesheet" href="{% static 'frame/frame.css' %}">
+</head>
+<body class="fr-phone">
+<div class="fr">
+  <header class="fr-brand"><span class="fr-diamond"></span><span>{{ hub_brand.name|default:"Black Diamond Lodge" }}</span></header>
+  <div class="fr-over">
+    <div class="fr-over-icon">&#9968;</div>
+    <h1>Thanks for staying!</h1>
+    <p>This link has expired, and photos from stays that have ended are deleted.
+       Scan the code on the hub for a new link.</p>
+  </div>
+</div>
+</body>
+</html>

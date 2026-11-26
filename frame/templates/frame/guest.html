@@ -1,0 +1,29 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Photos on the TVs</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+<link rel="stylesheet" href="{% static 'frame/frame.css' %}">
+</head>
+<body class="fr-phone">
+<div class="fr" id="fr"
+     data-state-url="{% url 'frame_guest_state' secret %}"
+     data-upload-url="{% url 'frame_guest_upload' secret %}"
+     data-photo-url="{% url 'frame_guest_photo' secret 'PHOTO' %}"
+     data-family="{{ family|yesno:'1,' }}"
+     data-csrf="{{ csrf_token }}">
+  <header class="fr-brand"><span class="fr-diamond"></span><span>{{ hub_brand.name|default:"Black Diamond Lodge" }}</span></header>
+  <h1 class="fr-h1">{% if family %}Family photos{% else %}Photos on the TVs{% endif %}</h1>
+  <p class="fr-sub" id="fr-sub"></p>
+  <div id="fr-view"><div class="fr-loading"><p>Loading…</p></div></div>
+  <input type="file" id="fr-file" accept="image/*" multiple hidden>
+  <div class="fr-modal fr-sheet" id="fr-modal" hidden><div class="fr-modal-card" id="fr-modal-card"></div></div>
+  <div class="fr-toast" id="fr-toast" role="status"></div>
+</div>
+<script src="{% static 'frame/frame-core.js' %}"></script>
+<script src="{% static 'frame/guest.js' %}"></script>
+</body>
+</html>
