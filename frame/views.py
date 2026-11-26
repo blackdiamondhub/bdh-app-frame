@@ -264,6 +264,20 @@ def api_interval(request):
     return _set_interval(request, _who(request))
 
 
+def _restart(who):
+    """Anyone who can use the app may put the TVs back on their photos."""
+    if who.role is None:
+        return _error("Changing the TVs isn't open right now", 403)
+    sync.restart_slideshows()
+    worker.poke()
+    return JsonResponse({"ok": True})
+
+
+@require_POST
+def api_restart(request):
+    return _restart(_who(request))
+
+
 @require_POST
 def api_photo(request, photo_id):
     return _edit_photo(request, _who(request), photo_id)
@@ -324,6 +338,14 @@ def guest_interval(request, secret):
     if who.role is None:
         return _error("This link has expired", 404)
     return _set_interval(request, who)
+
+
+@require_POST
+def guest_restart(request, secret):
+    who = _who_link(secret)
+    if who.role is None:
+        return _error("This link has expired", 404)
+    return _restart(who)
 
 
 @require_POST

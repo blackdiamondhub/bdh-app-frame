@@ -141,6 +141,7 @@ html:has(body.fr-page), body.fr-page {
 .fr-over h1 { font-size: 1.6rem; font-weight: 500; }
 .fr-over p { color: var(--fr-dim); }
 
+.fr-restart { margin-top: .75rem; align-self: flex-start; }
 .fr-interval { margin-top: 1rem; display: flex; flex-direction: column; gap: .5rem; }
 .fr-interval > span { color: var(--fr-mut, inherit); font-size: .9rem; }
 .fr-pairlink { display: inline-flex; align-items: center; gap: .4rem; margin-top: .75rem; text-decoration: none; }
