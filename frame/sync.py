@@ -5,7 +5,6 @@ go up). Photos on the TV that Frame didn't upload are never touched.
 """
 import logging
 import threading
-import random
 import time
 
 from django import db
@@ -31,11 +30,15 @@ _synced = {}  # tv id -> (fingerprint, time.monotonic()) of the last good sync
 _restart = set()  # tv ids to put back on a photo with the slideshow running
 
 
-def restart_slideshows():
-    """Someone pressed Start slideshow: on the next pass every TV in Art Mode
-    shows one of our photos (which also leaves the Art Mode menu) and the
-    slideshow is sent again."""
-    _restart.update(TV.objects.exclude(token="").values_list("id", flat=True))
+def restart_slideshows(tv_id=None):
+    """Someone pressed a TV's play button: on the next pass the slideshow is sent
+    again. Returns how many TVs that is (0: not a paired TV)."""
+    qs = TV.objects.exclude(token="")
+    if tv_id is not None:
+        qs = qs.filter(id=tv_id)
+    ids = list(qs.values_list("id", flat=True))
+    _restart.update(ids)
+    return len(ids)
 
 #: Pairing states shown on the TVs page.
 WAITING, PAIRED, DENIED, TIMEOUT, STANDBY, OFFLINE, FAILED = (
@@ -266,9 +269,6 @@ def _sync(t, client, wanted, now, use=True):
         elif cur in deleted or (cur.startswith("MY_") and cur not in on_tv):
             client.show(placed[wanted[0].id])
             showed = True
-        elif t.id in _restart:
-            client.show(cur if cur in ours else random.choice(sorted(ours)))
-            showed = True
 
     # 4. Slideshow over My Photos (off when there's nothing of ours to show).
     # Asked of the TV, not remembered: a reboot or someone using the TV's
@@ -281,7 +281,10 @@ def _sync(t, client, wanted, now, use=True):
         raise
     except tvlib.TVError:  # an older TV that can't say: trust what Frame last sent
         on = t.slideshow
-    if show != on or (showed and show != "off"):
+    # Start slideshow: sending the slideshow is all it takes, even from the Art
+    # Store or with Art Mode off (tried on the Sun Peaks TV); the TV switches over.
+    restart = t.id in _restart
+    if show != on or ((showed or restart) and show != "off"):
         if show == "off":
             client.set_slideshow(0, False)
         else:

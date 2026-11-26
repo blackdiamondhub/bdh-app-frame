@@ -43,13 +43,20 @@
     if (state.intervals) {
       h += '<div class="fr-label">Change photo every</div><div class="fr-chips">' + state.intervals.map(function (c) {
         return '<button class="fr-chip' + (c[0] === state.interval ? " on" : "") + '" data-interval="' + esc(c[0]) + '">' + esc(c[1]) + "</button>";
-      }).join("") + "</div>" + '<button class="fr-btn fr-restart" data-restart><i class="fas fa-play"></i> Start slideshow</button>';
+      }).join("") + "</div>";
+    }
+    if (state.tvs.length) {
+      h += '<div class="fr-label">TVs</div>' + state.tvs.map(function (t) {
+        return '<div class="fr-tv"><div class="fr-tv-main"><div class="fr-tv-name">' + esc(t.name) + '</div><div class="fr-tv-sub">' +
+          (t.online ? '<span class="fr-dot ok"></span>On' : '<span class="fr-dot"></span>Off') + "</div></div>" + F.play(t) + "</div>";
+      }).join("");
     }
     view.innerHTML = h;
   }
 
-  function restart() {
-    F.api(root.dataset.restartUrl, {}).then(function () { F.toast("Starting the slideshow"); })
+  function restart(id) {
+    var t = state.tvs.filter(function (x) { return String(x.id) === id; })[0];
+    F.api(root.dataset.restartUrl, { tv: Number(id) }).then(function () { F.toast("Starting the slideshow" + (t ? " on " + t.name : "")); })
       .catch(function (e) { F.toast(e.message, true); });
   }
 
@@ -106,7 +113,7 @@
     var d = el.dataset;
     if (d.target) { target = F.toggle(target, d.target); render(); return; }
     if (d.interval) { changeInterval(d.interval); return; }
-    if (d.restart !== undefined) { restart(); return; }
+    if (d.restart) { restart(d.restart); return; }
     if (d.photo) { e.stopPropagation(); openSheet(d.photo); return; }
     if (d.sheetTv && sheet) {
       sheet.tvs = F.toggle(sheet.tvs, d.sheetTv);

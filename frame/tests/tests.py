@@ -66,7 +66,7 @@ class FakeTV:
         return self.tv["current"]
 
     def art_mode(self):
-        return True
+        return self.tv.get("art", True)
 
     def show(self, cid):
         self.tv["current"] = cid
@@ -340,8 +340,8 @@ class SyncTests(Base):
         self.assertEqual(fake["slideshow"], (15, True))
 
     def test_start_slideshow_button(self):
-        """The TV sat on the Art Mode menu with the slideshow on (seen at Sun Peaks): the button
-        puts one of our photos on screen and sends the slideshow again, even on an unchanged TV."""
+        """The TV sat in the Art Store with the slideshow already set and Art Mode reporting off
+        (seen at Sun Peaks): the button sends the slideshow again, even on an unchanged TV."""
         t = self.tv()
         self.family(2)
         sync.sync_tv(t)
@@ -349,13 +349,10 @@ class SyncTests(Base):
         fake["log"].clear()
         sync.sync_tv(t)
         self.assertNotIn("show", [e[0] for e in fake["log"] if isinstance(e, tuple)])  # nothing to do
-        fake["current"] = "SAM-S0001"  # Samsung art picked from the menu
+        fake["art"] = False  # browsing the Art Store
         sync.restart_slideshows()
         sync.sync_tv(t)
-        shows = [e for e in fake["log"] if isinstance(e, tuple) and e[0] == "show"]
-        self.assertEqual(len(shows), 1)
-        self.assertIn(shows[0][1], set(Placement.objects.filter(tv=t).values_list("content_id", flat=True)))
-        self.assertEqual(fake["log"][-1], ("slideshow", 15, True))
+        self.assertEqual([e for e in fake["log"] if isinstance(e, tuple)], [("slideshow", 15, True)])
         fake["log"].clear()
         sync.sync_tv(t)  # done once, not on every pass
         self.assertEqual([e for e in fake["log"] if isinstance(e, tuple)], [])
@@ -645,8 +642,9 @@ class IntervalTests(Base):
         self.admin = get_user_model().objects.create_user("stefan", password="x", is_staff=True)
         self.c = Client()
 
-    def post(self, url, value):
-        return self.c.post(url, json.dumps({"interval": value}), content_type="application/json")
+    def post(self, url, *value, **body):
+        data = body or {"interval": value[0]}
+        return self.c.post(url, json.dumps(data), content_type="application/json")
 
     def test_default_and_old_hub_setting_carried_over(self):
         self.assertEqual(service.interval(), "15")
@@ -675,17 +673,26 @@ class IntervalTests(Base):
         self.assertEqual(self.post(reverse("frame_interval"), "1440").status_code, 200)
         self.assertEqual(self.c.get(reverse("frame_state")).json()["interval"], "1440")
 
-    def test_anyone_using_the_app_can_start_the_slideshow(self):
+    def test_anyone_using_the_app_can_start_a_tvs_slideshow(self):
+        """Each TV has its own play button; it restarts that TV only."""
         tv = TV.objects.create(name="Living Room", host="10.0.0.9", token="tok")
+        other = TV.objects.create(name="Office", host="10.0.0.10", token="tok")
+        unpaired = TV.objects.create(name="Basement", host="10.0.0.11")
+        url = reverse("frame_restart")
         with patch("frame.worker.poke") as poke:
-            self.assertEqual(self.c.post(reverse("frame_restart")).status_code, 403)  # wall screen
+            self.assertEqual(self.post(url, tv=tv.id).status_code, 403)  # wall screen
             self.hub_stay = cur()
             gs = service.evaluate()
-            self.assertEqual(self.c.post(reverse("frame_restart")).status_code, 200)
-            self.assertEqual(self.c.post(reverse("frame_guest_restart", args=[gs.link_secret])).status_code, 200)
-            self.assertEqual(self.c.post(reverse("frame_guest_restart", args=["nope"])).status_code, 404)
+            self.assertEqual(self.post(url, tv=tv.id).status_code, 200)
+            self.assertEqual(sync._restart, {tv.id})
+            self.assertEqual(self.post(reverse("frame_guest_restart", args=[gs.link_secret]), tv=other.id).status_code, 200)
+            self.assertEqual(self.post(reverse("frame_guest_restart", args=["nope"]), tv=tv.id).status_code, 404)
+            self.assertEqual(self.post(url, tv=unpaired.id).status_code, 404)
+            self.assertEqual(self.post(url, tv=999).status_code, 404)
+            for bad in ("1", True, [1]):
+                self.assertEqual(self.post(url, tv=bad).status_code, 400)
         self.assertEqual(poke.call_count, 2)
-        self.assertEqual(sync._restart, {tv.id})
+        self.assertEqual(sync._restart, {tv.id, other.id})
 
     def test_bad_values_and_nobody_signed_in(self):
         self.c.force_login(self.admin)

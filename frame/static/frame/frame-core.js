@@ -93,6 +93,13 @@
     return next();
   }
 
+  // A TV's play button: starts (or restarts) its slideshow.
+  function play(t) {
+    var ok = t.online && t.paired;
+    return '<button class="fr-play" data-restart="' + t.id + '"' + (ok ? "" : " disabled") +
+      ' aria-label="Start the slideshow on ' + esc(t.name) + '"><i class="fas fa-play"></i></button>';
+  }
+
   function tvNames(photo, tvs) {
     if (photo.all_tvs) return ["All TVs"];
     var byId = {};
@@ -150,7 +157,7 @@
 
   window.Frame = {
     root: root, esc: esc, toast: toast, api: api, photoUrl: photoUrl, uploadAll: uploadAll,
-    tvNames: tvNames, sending: sending, day: day, chips: chips, toggle: toggle,
+    tvNames: tvNames, play: play, sending: sending, day: day, chips: chips, toggle: toggle,
     modal: modal, closeModal: closeModal,
   };
 })();
