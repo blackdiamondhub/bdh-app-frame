@@ -315,6 +315,24 @@ class PrivacyTests(Base):
         office.save()
         self.assertEqual(sorted(t["id"] for t in self.state()["tvs"]), [living.id, office.id])
 
+    def test_tvs_with_the_power_cut(self):
+        """Between stays the TVs have no power: nothing answers, nothing breaks, nothing is forgotten."""
+        living = self.tv()
+        sync.sync_all()
+        self.assertTrue(Placement.objects.filter(tv=living).exists())
+        FakeTV.tvs.clear()
+        with patch("frame.discovery.local_subnet", return_value=__import__("ipaddress").ip_network("192.168.11.0/30")):
+            self.assertEqual(discovery.discover(), [])
+        sync.sync_all()
+        living.refresh_from_db()
+        self.assertEqual((living.token, living.online), ("tok", False))
+        self.assertTrue(Placement.objects.filter(tv=living).exists())
+        s = self.state()
+        self.assertEqual([(t["id"], t["online"]) for t in s["tvs"]], [(living.id, False)])
+        f = io.BytesIO(jpeg())
+        f.name = "x.jpg"
+        self.assertEqual(self.c.post(reverse("frame_upload"), {"photo": f, "tvs": "all"}).status_code, 200)
+
     def test_nobody_sees_anything_without_a_stay(self):
         service.end_stay(self.gs)
         s = self.state()
