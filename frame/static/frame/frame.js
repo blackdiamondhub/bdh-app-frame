@@ -10,6 +10,9 @@
   var uploads = [];            // [{progress, error}] while uploading
   var guestTvs = "all";        // guest: TVs for new photos
   var qrLoaded = "";
+  // The hub's wall screen (wide, touch-only, like the hub keyboard's check) has no photos to pick.
+  var mq = function (q) { return window.matchMedia && window.matchMedia(q).matches; };
+  var onScreen = window.innerWidth >= 1280 && mq("(any-pointer: coarse)") && !mq("(any-hover: hover)");
 
   function load() {
     return F.api(root.dataset.stateUrl).then(function (s) {
@@ -80,8 +83,8 @@
     h += '<div class="fr-cols"><section class="fr-card"><div class="fr-card-head"><div class="fr-grow">';
     if (tab === "family") {
       h += "<h2>Family photos</h2><p>Shown on the TVs when no guests are staying.</p></div>" +
-        '<button class="fr-btn" data-act="family-qr"><i class="fas fa-qrcode"></i> Add from phone</button>' +
-        '<button class="fr-btn primary" data-act="upload"><i class="fas fa-plus"></i> Upload</button></div>';
+        '<button class="fr-btn' + (onScreen ? " primary" : "") + '" data-act="family-qr"><i class="fas fa-qrcode"></i> Add from phone</button>' +
+        (onScreen ? "" : '<button class="fr-btn primary" data-act="upload"><i class="fas fa-plus"></i> Upload</button>') + "</div>";
     } else {
       h += "<h2>Guest photos</h2><p>" + (state.stay ? "This stay's photos. They are deleted when it ends." : "No guests are staying.") +
         "</p></div>" + (state.stay && state.stay.link ? '<button class="fr-btn" data-act="guest-qr"><i class="fas fa-qrcode"></i> Guests\' QR code</button>' : "") + "</div>";
@@ -90,7 +93,7 @@
       return tile(p, { check: true, sel: !!selected[p.id] });
     }).join("");
     h += tiles ? '<div class="fr-grid">' + tiles + "</div>"
-      : '<div class="fr-empty">' + (tab === "family" ? "No family photos yet. Upload some, or add them from your phone." : "No guest photos.") + "</div>";
+      : '<div class="fr-empty">' + (tab === "family" ? (onScreen ? "No family photos yet. Add them from your phone." : "No family photos yet. Upload some, or add them from your phone.") : "No guest photos.") + "</div>";
     var sel = list.filter(function (p) { return selected[p.id]; });
     if (sel.length) {
       var common = sel.every(function (p) { return p.all_tvs; }) ? "all"
