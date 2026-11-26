@@ -14,7 +14,7 @@ from django.utils import timezone
 from PIL import Image
 
 from bdh_sdk.testing import assert_plugin_importable
-from frame import images, service, stay, sync, tv as tvlib, views
+from frame import discovery, images, service, stay, sync, tv as tvlib, views, worker
 from frame.models import FAMILY, GUEST, TV, GuestStay, Photo, Placement
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -84,16 +84,6 @@ def make_fake_tv(host, photos=("MY_F0001",), current="MY_F0001"):
     return FakeTV.tvs[host]
 
 
-class InlineThread:
-    """Runs a background thread's work straight away (tests share one DB connection)."""
-
-    def __init__(self, target, name=None, daemon=None):
-        self.target = target
-
-    def start(self):
-        self.target()
-
-
 def cur(key="k1", guest="Henderson family", checkout=None, owner=False):
     return stay.Current(key=key, guest=guest, checkout=checkout or datetime(2026, 11, 29, 11, tzinfo=UTC),
                         owner=owner)
@@ -109,14 +99,27 @@ class Base(TestCase):
         FakeTV.tvs = {}
         tvlib.set_factory(FakeTV, pairer=lambda host: "tok-" + host)
         self.addCleanup(tvlib.set_factory)
-        p = patch("frame.tv.describe", side_effect=lambda host: {"name": "Living Room", "model": "QN55LS03",
-                                                                  "frame": True, "on": host in FakeTV.tvs})
+        p = patch("frame.tv.describe", side_effect=lambda host: {"uid": "uuid-" + host, "name": "Living Room",
+                                                                  "model": "QN55LS03", "frame": True,
+                                                                  "on": host in FakeTV.tvs})
         p.start()
         self.addCleanup(p.stop)
         self.hub_stay = None
         p2 = patch("frame.stay.current", side_effect=lambda: self.hub_stay)
         p2.start()
         self.addCleanup(p2.stop)
+        self.settings = {}
+        real_setting = service.setting
+        p3 = patch("frame.service.setting", side_effect=lambda k, d: self.settings.get(k, real_setting(k, d)))
+        p3.start()
+        self.addCleanup(p3.stop)
+        sync._pair_tries.clear()
+        p4 = patch("frame.sync._spawn", side_effect=lambda fn, *args: fn(*args))  # pair inline
+        p4.start()
+        self.addCleanup(p4.stop)
+        p5 = patch("frame.sync._close_db")
+        p5.start()
+        self.addCleanup(p5.stop)
 
     def tv(self, host="192.168.11.138", **kw):
         make_fake_tv(host, **kw)
@@ -221,7 +224,8 @@ class SyncTests(Base):
         self.assertEqual(fake["slideshow"], (0, False))
 
     def test_targets(self):
-        a, b = self.tv("10.0.0.1"), self.tv("10.0.0.2")
+        self.tv("10.0.0.1")
+        b = self.tv("10.0.0.2")
         p = service.add_photo(jpeg(), FAMILY, tv_ids=[str(b.id)])
         sync.sync_all()
         self.assertEqual(len(FakeTV.tvs["10.0.0.1"]["photos"]), 1)
@@ -239,6 +243,20 @@ class SyncTests(Base):
         self.assertEqual(FakeTV.tvs[t.host]["photos"], ["MY_F0001"])
         self.assertFalse(Placement.objects.exists())
 
+    def test_new_photo_goes_on_screen_right_away(self):
+        t = self.tv()
+        self.family(1)
+        sync.sync_tv(t)
+        fake = FakeTV.tvs[t.host]
+        fake["current"] = "MY_F0001"  # the slideshow moved on to their own photo
+        (p,) = self.family(1)
+        sync.sync_tv(t)
+        self.assertEqual(fake["current"], Placement.objects.get(photo=p).content_id)
+        # Nothing new: the slideshow is left alone.
+        fake["current"] = "MY_F0001"
+        sync.sync_tv(t)
+        self.assertEqual(fake["current"], "MY_F0001")
+
     def test_off_or_unpaired_tv(self):
         off = TV.objects.create(name="Off", host="10.9.9.9", token="tok")
         self.assertFalse(sync.sync_tv(off))
@@ -248,7 +266,9 @@ class SyncTests(Base):
         new = TV.objects.create(name="New", host="10.0.0.5")
         self.assertFalse(sync.sync_tv(new))
         new.refresh_from_db()
-        self.assertEqual(new.error, "Not paired")
+        # Frame asked the TV to let it in (someone pressed Allow), and doesn't nag it again soon.
+        self.assertEqual((new.token, new.error), ("tok-10.0.0.5", ""))
+        self.assertFalse(sync.maybe_pair(new))
 
     def test_tv_error_is_recorded(self):
         t = self.tv()
@@ -320,24 +340,16 @@ class PrivacyTests(Base):
             self.assertIsNone(self.state()["role"])
             self.assertEqual(self.c.get(reverse("frame_guest_state", args=[self.gs.link_secret])).status_code, 404)
 
-    def test_admin_sees_all_and_manages_tvs(self):
+    def test_admin_sees_all(self):
         self.c.force_login(self.admin)
         s = self.state()
         self.assertEqual(s["role"], "admin")
         self.assertEqual({p["id"] for p in s["photos"]}, {self.fam.id, self.guest_photo.id})
-        make_fake_tv("192.168.11.138")
-        with patch("frame.views.threading.Thread", InlineThread), patch("frame.views._close_db"):
-            r = self.c.post(reverse("frame_tvs"), json.dumps({"op": "add", "host": "192.168.11.138"}),
-                            content_type="application/json")
-        self.assertEqual(r.status_code, 200, r.content)
-        self.assertEqual(TV.objects.get(host="192.168.11.138").token, "tok-192.168.11.138")
         self.assertEqual(self.c.get(reverse("frame_qr") + "?for=family").status_code, 200)
 
-    def test_non_admin_cant_touch_tvs_or_stay(self):
-        for url, body in ((reverse("frame_tvs"), {"op": "add", "host": "1.2.3.4"}),
-                          (reverse("frame_stay"), {"op": "end"})):
-            r = self.c.post(url, json.dumps(body), content_type="application/json")
-            self.assertEqual(r.status_code, 403)
+    def test_non_admin_cant_end_stay(self):
+        r = self.c.post(reverse("frame_stay"), json.dumps({"op": "end"}), content_type="application/json")
+        self.assertEqual(r.status_code, 403)
         self.assertEqual(self.c.get(reverse("frame_qr") + "?for=family").status_code, 404)
 
     def test_family_link(self):
@@ -354,6 +366,90 @@ class PrivacyTests(Base):
         r = self.c.post(reverse("frame_stay"), json.dumps({"op": "end"}), content_type="application/json")
         self.assertEqual(r.status_code, 200)
         self.assertFalse(Photo.objects.filter(kind=GUEST).exists())
+
+
+class DiscoveryTests(Base):
+    """TVs are found on the network; admins exclude them in the hub's Settings, not in the app."""
+
+    def found(self, host, uid=None, name="Office television"):
+        return {"uid": uid or "uuid-" + host, "host": host, "name": name, "model": "QN65LS03", "frame": True}
+
+    def test_new_tv_is_added_and_a_moved_tv_keeps_its_row(self):
+        (t,) = discovery.remember([self.found("192.168.10.124")])
+        self.assertEqual((t.uid, t.name, t.token), ("uuid-192.168.10.124", "Office television", ""))
+        self.assertEqual(discovery.remember([self.found("192.168.10.150", uid=t.uid)]), [])
+        t.refresh_from_db()
+        self.assertEqual(t.host, "192.168.10.150")
+        self.assertEqual(TV.objects.count(), 1)
+
+    def test_tv_added_before_discovery_gets_its_uid(self):
+        old = self.tv("192.168.11.138")
+        self.assertEqual(discovery.remember([self.found("192.168.11.138", name="Living Room Television")]), [])
+        old.refresh_from_db()
+        self.assertEqual((old.uid, old.name, old.token), ("uuid-192.168.11.138", "Living Room", "tok"))
+
+    def test_another_tv_taking_an_address(self):
+        a = self.tv("10.0.0.5")
+        a.uid = "uuid-a"
+        a.save()
+        (b,) = discovery.remember([self.found("10.0.0.5", uid="uuid-b")])
+        a.refresh_from_db()
+        self.assertTrue(a.host.startswith(discovery.MOVED))
+        self.assertEqual(b.host, "10.0.0.5")
+        sync.sync_all()  # the moved TV isn't contacted
+
+    def test_scan_sweeps_subnets_and_known_tvs(self):
+        self.tv("192.168.11.138")
+        frames = {"192.168.10.124", "192.168.11.138"}
+        with patch("frame.discovery._open", side_effect=lambda h: h in frames | {"192.168.10.9"}), \
+                patch("frame.tv.describe", side_effect=lambda h: {"uid": "uuid-" + h, "name": h, "model": "",
+                                                                  "frame": h in frames, "on": True}):
+            got = discovery.scan(discovery.parse_subnets("192.168.10.0/24"))
+        self.assertEqual({d["host"] for d in got}, frames)
+
+    def test_parse_subnets(self):
+        nets = discovery.parse_subnets("192.168.11.0/24, 10.0.0.7/24 nonsense 10.0.0.0/8 fe80::/64")
+        self.assertEqual([str(n) for n in nets], ["192.168.11.0/24", "10.0.0.0/24"])
+        self.settings["scan_subnets"] = "192.168.11.0/24"
+        with patch("frame.discovery.local_subnet", return_value=__import__("ipaddress").ip_network("192.168.10.0/24")):
+            self.assertEqual([str(n) for n in discovery.subnets()], ["192.168.10.0/24", "192.168.11.0/24"])
+
+    def test_excluded_tv_is_emptied_not_paired_and_hidden(self):
+        living, office = self.tv("192.168.11.138"), self.tv("192.168.10.124")
+        office.uid = "uuid-office"
+        office.save()
+        self.family(2)
+        sync.sync_all()
+        self.assertEqual(len(FakeTV.tvs[office.host]["photos"]), 3)
+        self.settings["skip_tvs"] = '["uuid-office"]'
+        self.assertEqual([t.id for t in discovery.enabled_tvs()], [living.id])
+        sync.sync_all()
+        self.assertEqual(FakeTV.tvs[office.host]["photos"], ["MY_F0001"])  # only the TV's own photo
+        self.assertFalse(Placement.objects.filter(tv=office).exists())
+        self.assertEqual(len(FakeTV.tvs[living.host]["photos"]), 3)
+        with self.assertRaises(service.Invalid):
+            service.add_photo(jpeg(), FAMILY, tv_ids=[office.id])
+        # An excluded TV that isn't paired is never asked to pair.
+        make_fake_tv("10.0.0.9")
+        TV.objects.create(name="Basement", host="10.0.0.9", uid="uuid-basement")
+        self.settings["skip_tvs"] = '["uuid-office", "uuid-basement"]'
+        sync.sync_all()
+        self.assertEqual(TV.objects.get(uid="uuid-basement").token, "")
+
+    def test_settings_choices(self):
+        self.tv("192.168.11.138")
+        TV.objects.create(name="Office television", host="192.168.10.124", uid="uuid-o")
+        self.assertEqual(discovery.tv_choices(), [
+            ("host:192.168.11.138", "Living Room \u00b7 192.168.11.138"),
+            ("uuid-o", "Office television \u00b7 192.168.10.124 \u00b7 not paired yet"),
+        ])
+
+    def test_worker_discovers_on_its_schedule(self):
+        worker._last_discover = None
+        with patch("frame.discovery.discover") as d, patch("frame.sync.sync_all"):
+            worker.tick()
+            worker.tick()
+        self.assertEqual(d.call_count, 1)
 
 
 class ImageTests(SimpleTestCase):
@@ -387,6 +483,21 @@ class PluginTests(SimpleTestCase):
         self.assertIn("stays.read", spec.permissions)
         self.assertTrue((ROOT / "static" / spec.tiles[0].icon).exists())
         self.assertEqual(reverse("frame_state"), "/frame/api/state/")
+
+    def test_settings_manage_tvs(self):
+        from frame.plugin import spec
+        by_key = {x.key: x for x in spec.settings}
+        self.assertEqual(by_key["skip_tvs"].choices_from, "frame.discovery.tv_choices")
+        self.assertIn("scan_subnets", by_key)
+        js = (ROOT / "static" / "frame" / "frame.js").read_text()
+        self.assertNotIn("add-tv", js)  # TVs are managed in Settings, not in the app
+
+    def test_hub_page_is_dark_like_the_other_apps(self):
+        # Bootstrap's body is white; the page must set the shared dark backdrop itself.
+        self.assertIn("{% block body_class %}fr-page{% endblock %}",
+                      (ROOT / "templates" / "frame" / "index.html").read_text())
+        css = (ROOT / "static" / "frame" / "frame.css").read_text()
+        self.assertRegex(css, r"body\.fr-page\s*\{\s*background: radial-gradient\([^)]*#1d3350")
 
     def test_templates_escape_and_never_inline_family_photos(self):
         js = (ROOT / "static" / "frame" / "guest.js").read_text()

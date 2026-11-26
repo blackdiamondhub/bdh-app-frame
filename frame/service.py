@@ -19,7 +19,7 @@ from bdh_sdk.settings import app_setting, as_bool
 from bdh_sdk.storage import app_media
 
 from . import images, stay
-from .models import FAMILY, GUEST, TV, GuestStay, Photo, Placement
+from .models import FAMILY, GUEST, GuestStay, Photo
 
 log = logging.getLogger(__name__)
 
@@ -165,8 +165,10 @@ def _save(st, name, data):
 def _tvs(tv_ids):
     if tv_ids is None:
         return None
+    from .discovery import enabled_tvs
+
     ids = {int(i) for i in tv_ids if str(i).isdigit()}
-    tvs = list(TV.objects.filter(id__in=ids))
+    tvs = [t for t in enabled_tvs() if t.id in ids]
     if not tvs:
         raise Invalid("Pick at least one TV")
     return tvs

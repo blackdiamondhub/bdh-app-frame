@@ -53,9 +53,9 @@
   }
 
   function tvStatus(t) {
-    if (!t.paired) return t.pairing === "waiting"
+    if (!t.paired) return t.pairing
       ? '<span class="fr-dot warn"></span>Press <b>Allow</b> on the TV'
-      : '<span class="fr-dot warn"></span>' + esc(t.pairing || "Needs pairing");
+      : '<span class="fr-dot warn"></span>Not paired yet · Frame asks again when it\'s on';
     if (!t.online) return '<span class="fr-dot"></span>Off · photos go up when it\'s on';
     if (t.error) return '<span class="fr-dot bad"></span>' + esc(t.error);
     return '<span class="fr-dot ok"></span>On';
@@ -106,33 +106,22 @@
   var INTERVALS = { "3": "3 min", "15": "15 min", "60": "1 hour", "720": "12 hours", "1440": "1 day" };
 
   function tvPanel() {
-    var h = '<aside class="fr-card"><div class="fr-card-head"><h2 class="fr-grow">TVs</h2>' +
-      '<button class="fr-btn" data-act="add-tv"><i class="fas fa-plus"></i> Add TV</button></div>';
-    if (!state.tvs.length) h += '<div class="fr-empty">Add a Frame TV by its IP address.</div>';
+    var h = '<aside class="fr-card"><div class="fr-card-head"><h2 class="fr-grow">TVs</h2></div>';
+    if (!state.tvs.length) h += '<div class="fr-empty">No Frame TVs found yet. Turn them on; Frame looks for them every 10 minutes.</div>';
     state.tvs.forEach(function (t) {
       h += '<div class="fr-tv"><div class="fr-tv-art"></div><div class="fr-tv-main"><div class="fr-tv-name">' + esc(t.name) +
         '</div><div class="fr-tv-sub">' + tvStatus(t) + " · " + esc(t.host) + "</div>" +
         (t.unmanaged ? '<div class="fr-tv-sub">' + t.unmanaged + " other photo" + (t.unmanaged === 1 ? "" : "s") +
           " in My Photos (not from Frame; left alone, and guests can see them)</div>" : "") +
-        '</div><button class="fr-link" data-tv-menu="' + t.id + '">' + (t.paired ? "Edit" : "Pair") + "</button></div>";
+        "</div></div>";
     });
     var s = state.settings || {};
     h += '<div class="fr-rows"><div class="fr-row"><span>Change photo every</span><span>' + esc(INTERVALS[s.interval] || s.interval + " min") +
       '</span></div><div class="fr-row"><span>Order</span><span>' + (s.shuffle ? "Shuffle" : "In order") +
       '</span></div><div class="fr-row"><span>Matte for new photos</span><span>' + esc(s.matte === "none" ? "None" : s.matte) +
       '</span></div><div class="fr-row"><span>Guest uploads</span><span>' + (state.guest_uploads ? "On during guest stays" : "Off") +
-      '</span></div></div><p class="fr-note">Change these in Settings → Apps → Frame.</p></aside>';
+      '</span></div></div><p class="fr-note">Change these, and which TVs Frame uses, in Settings → Apps → Frame.</p></aside>';
     return h;
-  }
-
-  function tvMenu(id) {
-    var t = state.tvs.filter(function (x) { return x.id === id; })[0];
-    if (!t) return;
-    F.modal("<h3>" + esc(t.name) + "</h3><p>" + esc(t.model || "Samsung Frame") + " · " + esc(t.host) + "</p>" +
-      '<label class="fr-label" for="fr-tv-name">Name</label><input type="text" id="fr-tv-name" value="' + esc(t.name) + '">' +
-      '<div class="fr-modal-actions"><button class="fr-btn danger" data-tv-remove="' + t.id + '">Remove</button>' +
-      '<button class="fr-btn" data-tv-pair="' + t.id + '">' + (t.paired ? "Pair again" : "Pair") + "</button>" +
-      '<button class="fr-btn primary" data-tv-rename="' + t.id + '">Save</button></div>');
   }
 
   function showQr(url, title, text) {
@@ -235,31 +224,6 @@
         .then(load).catch(function (err) { F.toast(err.message, true); });
       return;
     }
-    if (d.tvMenu) { tvMenu(Number(d.tvMenu)); return; }
-    if (d.tvRename) {
-      F.api(root.dataset.tvsUrl, { op: "rename", id: Number(d.tvRename), name: document.getElementById("fr-tv-name").value })
-        .then(function () { F.closeModal(); load(); }).catch(function (err) { F.toast(err.message, true); });
-      return;
-    }
-    if (d.tvPair) {
-      F.api(root.dataset.tvsUrl, { op: "pair", id: Number(d.tvPair) })
-        .then(function () { F.closeModal(); F.toast("Press Allow on the TV"); load(); }).catch(function (err) { F.toast(err.message, true); });
-      return;
-    }
-    if (d.tvRemove) {
-      if (!window.confirm("Remove this TV from Frame? Photos already on it stay there.")) return;
-      F.api(root.dataset.tvsUrl, { op: "remove", id: Number(d.tvRemove) })
-        .then(function () { F.closeModal(); load(); }).catch(function (err) { F.toast(err.message, true); });
-      return;
-    }
-    if (d.addTv !== undefined || d.act === "add-tv-go") {
-      var host = document.getElementById("fr-tv-host").value.trim();
-      el.disabled = true;
-      F.api(root.dataset.tvsUrl, { op: "add", host: host })
-        .then(function () { F.closeModal(); F.toast("Press Allow on the TV"); load(); })
-        .catch(function (err) { el.disabled = false; F.toast(err.message, true); });
-      return;
-    }
     switch (d.act) {
       case "upload": fileInput.click(); break;
       case "clear": selected = {}; render(); break;
@@ -273,11 +237,6 @@
         break;
       case "guest-qr":
         showQr(root.dataset.qrUrl + "?t=" + Date.now(), "Guests' QR code", "The link guests use to add photos during this stay.");
-        break;
-      case "add-tv":
-        F.modal('<h3>Add a Frame TV</h3><p>Turn the TV on, then enter its IP address. You\'ll need to press Allow on the TV.</p>' +
-          '<input type="text" id="fr-tv-host" placeholder="192.168.11.138" inputmode="decimal">' +
-          '<div class="fr-modal-actions"><button class="fr-btn" data-close>Cancel</button><button class="fr-btn primary" data-act="add-tv-go">Add</button></div>');
         break;
       case "end-stay":
         if (!window.confirm("End this guest stay now? Its photos are deleted for good and your photos go back on the TVs.")) return;

@@ -8,19 +8,23 @@ import logging
 import os
 import sys
 import threading
+import time
 
 from django.db import close_old_connections
 
-from . import service, sync
+from . import discovery, service, sync
 
 log = logging.getLogger(__name__)
 
 START_DELAY = 10
 INTERVAL = 60
+#: How often to look for Frame TVs on the network.
+DISCOVER_EVERY = 10 * 60
 
 _wake = threading.Event()
 _started = False
 _start_lock = threading.Lock()
+_last_discover = None
 
 
 def _is_runtime(path):
@@ -44,8 +48,21 @@ def should_start(argv=None):
     return False
 
 
+def _discover_if_due():
+    global _last_discover
+    now = time.monotonic()
+    if _last_discover is not None and now - _last_discover < DISCOVER_EVERY:
+        return
+    _last_discover = now
+    try:
+        discovery.discover()
+    except Exception:  # noqa: BLE001
+        log.exception("Looking for Frame TVs failed")
+
+
 def tick():
     close_old_connections()
+    _discover_if_due()
     try:
         active = service.evaluate()
     except Exception:  # noqa: BLE001

@@ -7,7 +7,6 @@ urlpatterns = [
     path("api/state/", views.api_state, name="frame_state"),
     path("api/upload/", views.api_upload, name="frame_upload"),
     path("api/photos/<str:photo_id>/", views.api_photo, name="frame_photo"),
-    path("api/tvs/", views.api_tvs, name="frame_tvs"),
     path("api/stay/", views.api_stay, name="frame_stay"),
     path("qr.svg", views.qr, name="frame_qr"),
     path("thumb/<str:photo_id>.jpg", views.thumb, name="frame_thumb"),

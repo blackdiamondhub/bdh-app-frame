@@ -1,8 +1,6 @@
 import json
 import logging
-import threading
 
-from django import db
 from django.core import signing
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render
@@ -13,8 +11,8 @@ from django.views.decorators.http import require_GET, require_POST
 
 from bdh_sdk.auth import is_admin
 
-from . import images, service, tv as tvlib
-from .models import FAMILY, GUEST, TV, GuestStay, Photo, Placement
+from . import discovery, images, service, sync
+from .models import FAMILY, GUEST, GuestStay, Photo, Placement
 
 log = logging.getLogger(__name__)
 
@@ -102,14 +100,10 @@ def _photo(who, p, sent):
             "added": p.added_at.isoformat(), "portrait": p.height > p.width}
 
 
-_pairing = {}  # tv id -> "waiting" | error text
-_pair_lock = threading.Lock()
-
-
 def _tv(t, admin):
     d = {"id": t.id, "name": t.name, "online": t.online, "paired": bool(t.token)}
     if admin:
-        d.update(host=t.host, model=t.model, pairing=_pairing.get(t.id), error=t.error,
+        d.update(host=t.host, model=t.model, pairing=sync.pair_waiting(t.id), error=t.error,
                  unmanaged=t.unmanaged, last_sync=t.last_sync.isoformat() if t.last_sync else None)
     return d
 
@@ -133,7 +127,7 @@ def _state(request, who):
     out = {
         "role": who.role,
         "guest_uploads": service.guest_uploads_on(),
-        "tvs": [_tv(t, who.role == ADMIN) for t in TV.objects.all()] if who.role else [],
+        "tvs": [_tv(t, who.role == ADMIN) for t in discovery.enabled_tvs()] if who.role else [],
         "photos": [_photo(who, p, sent) for p in photos],
         "stay": None,
         "limit": service.GUEST_LIMIT if who.role == GUEST else service.FAMILY_LIMIT,
@@ -258,78 +252,7 @@ def thumb(request, photo_id):
     return _thumb(_who(request), photo_id)
 
 
-# --- admin: TVs and the stay ------------------------------------------------------------
-
-def _close_db():
-    """A pairing thread's own DB connection, closed when it's done."""
-    db.connection.close()
-
-
-def _pair_in_background(tv_id, host):
-    def run():
-        try:
-            token = tvlib.do_pair(host)
-        except tvlib.TVError as exc:
-            with _pair_lock:
-                _pairing[tv_id] = f"Not paired: {exc}"[:200]
-            return
-        try:
-            TV.objects.filter(id=tv_id).update(token=token, error="")
-        finally:
-            _close_db()
-        with _pair_lock:
-            _pairing.pop(tv_id, None)
-        service.wake_worker()
-
-    with _pair_lock:
-        if _pairing.get(tv_id) == "waiting":
-            return
-        _pairing[tv_id] = "waiting"
-    threading.Thread(target=run, name=f"frame-pair-{tv_id}", daemon=True).start()
-
-
-@require_POST
-def api_tvs(request):
-    if not is_admin(request):
-        return _error("Only an admin can change TVs", 403)
-    data = _body(request)
-    if data is None:
-        return _error("Expected a JSON object")
-    op = data.get("op")
-    if op == "add":
-        host = str(data.get("host") or "").strip()
-        if not host or len(host) > 255 or any(c in host for c in "/@ "):
-            return _error("Enter the TV's IP address")
-        if TV.objects.filter(host=host).exists():
-            return _error("That TV is already added")
-        try:
-            d = tvlib.describe(host)
-        except tvlib.Offline:
-            return _error("No TV answered at that address (is it on?)")
-        if not d["frame"]:
-            return _error(f"{d['name']} isn't a Frame TV")
-        t = TV.objects.create(host=host, name=str(data.get("name") or d["name"])[:80], model=d["model"])
-        _pair_in_background(t.id, t.host)
-        return JsonResponse({"tv": _tv(t, True)})
-    t = TV.objects.filter(id=data.get("id")).first() if str(data.get("id", "")).isdigit() else None
-    if t is None:
-        return _error("No such TV", 404)
-    if op == "rename":
-        name = str(data.get("name") or "").strip()[:80]
-        if not name:
-            return _error("Enter a name")
-        t.name = name
-        t.save(update_fields=["name"])
-    elif op == "pair":
-        _pair_in_background(t.id, t.host)
-    elif op == "remove":
-        # Leaves the photos on the TV: Frame can't reach it to clean up once it's gone.
-        t.delete()
-        return JsonResponse({"deleted": data.get("id")})
-    else:
-        return _error("Unknown op")
-    return JsonResponse({"tv": _tv(t, True)})
-
+# --- admin: the stay ----------------------------------------------------------------
 
 @require_POST
 def api_stay(request):

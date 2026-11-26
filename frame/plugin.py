@@ -1,5 +1,5 @@
 from bdh_sdk import PluginSpec, Setting, Tile
-from bdh_sdk.plugins import BOOL, CHOICE, LIFECYCLE_ALWAYS, NETWORK_LAN
+from bdh_sdk.plugins import BOOL, CHOICE, LIFECYCLE_ALWAYS, MULTI, NETWORK_LAN
 
 MATTES = (
     ("none", "No matte"),
@@ -28,6 +28,14 @@ spec = PluginSpec(
         Setting("matte", "Matte for new photos", type=CHOICE, default="none", choices=MATTES),
         Setting("guest_uploads", "Guests can add photos during their stay", type=BOOL, default=True,
                 help="Family photos come off the TVs during guest stays either way."),
+        Setting("skip_tvs", "Leave these TVs alone", type=MULTI, default=None,
+                choices_from="frame.discovery.tv_choices",
+                help="Frame uses every Frame TV it finds on the network (it looks every 10 minutes; "
+                     "the TV must be on). A new TV asks you to press Allow on it. Tick a TV to take "
+                     "Frame's photos off it and leave it alone."),
+        Setting("scan_subnets", "Also look for TVs on", default="",
+                help="Other subnets with Frame TVs, e.g. 192.168.11.0/24 (the hub's own network "
+                     "is always searched)."),
     ),
     api_version=2,
     # Who is staying decides whether family or guest photos are on the TVs.

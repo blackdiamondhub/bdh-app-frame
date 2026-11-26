@@ -40,9 +40,10 @@ def info(host, timeout=4):
 
 
 def describe(host):
-    """``{"name", "model", "frame", "on"}`` for the TV at ``host``."""
+    """``{"uid", "name", "model", "frame", "on"}`` for the TV at ``host``."""
     d = info(host)
     return {
+        "uid": str(d.get("id") or "")[:64],
         "name": str(d.get("name") or "Samsung TV").strip(),
         "model": str(d.get("modelName") or ""),
         "frame": str(d.get("FrameTVSupport", "")).lower() == "true",
