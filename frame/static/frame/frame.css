@@ -114,6 +114,11 @@
 
 /* Phones */
 body.fr-phone { margin: 0; background: var(--fr-bg); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+/* The hub page: the same dark alpine backdrop as the other apps (Bootstrap's body is white). */
+html:has(body.fr-page), body.fr-page {
+  background: radial-gradient(ellipse 120% 80% at 50% 0%, #1d3350 0%, #0c1622 55%, #060a10 100%) fixed !important;
+  color: var(--fr-text);
+}
 .fr-phone .fr { max-width: 32rem; margin: 0 auto; padding: calc(1rem + env(safe-area-inset-top)) 1.2rem 3rem; }
 .fr-brand { display: flex; align-items: center; gap: .7rem; text-transform: uppercase; letter-spacing: .25em;
             font-weight: 700; font-size: .8rem; margin-bottom: 1.4rem; }

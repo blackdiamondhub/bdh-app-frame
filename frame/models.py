@@ -16,6 +16,8 @@ def _photo_id():
 
 
 class TV(models.Model):
+    # The TV's own id (from /api/v2/), so a new IP address doesn't make it a new TV.
+    uid = models.CharField(max_length=64, blank=True, db_index=True)
     name = models.CharField(max_length=80)
     host = models.CharField(max_length=255, unique=True)
     model = models.CharField(max_length=80, blank=True)
