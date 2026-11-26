@@ -13,6 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 from PIL import Image
 
+from bdh_sdk.storage import set_state_backend
 from bdh_sdk.testing import assert_plugin_importable
 from frame import discovery, images, service, stay, sync, tv as tvlib, views, worker
 from frame.models import FAMILY, GUEST, TV, GuestStay, Photo, Placement
@@ -75,6 +76,11 @@ class FakeTV:
         self.tv["slideshow"] = (minutes, shuffle)
         self.tv["log"].append(("slideshow", minutes, shuffle))
 
+    def slideshow(self):
+        self.tv["log"].append("status")
+        s = self.tv["slideshow"]
+        return "off" if not s or not s[0] else f"{s[0]}:{1 if s[1] else 0}"
+
     def close(self):
         pass
 
@@ -114,6 +120,14 @@ class Base(TestCase):
         p3.start()
         self.addCleanup(p3.stop)
         sync._pair_tries.clear()
+        sync._pair_status.clear()
+        sync._synced.clear()
+        p_re = patch("frame.sync.RECHECK", 0)  # every sync visits the TV unless a test says otherwise
+        p_re.start()
+        self.addCleanup(p_re.stop)
+        set_state_backend(None)
+        self.addCleanup(set_state_backend, None)
+        service._last_interval = None
         p4 = patch("frame.sync._spawn", side_effect=lambda fn, *args: fn(*args))  # pair inline
         p4.start()
         self.addCleanup(p4.stop)
@@ -187,10 +201,10 @@ class SyncTests(Base):
         t.refresh_from_db()
         self.assertEqual((t.unmanaged, t.error), (1, ""))
         self.assertEqual(fake["slideshow"], (15, True))
-        # Second sync is a no-op.
+        # Second sync only looks.
         fake["log"].clear()
         sync.sync_tv(t)
-        self.assertEqual(fake["log"], ["list"])
+        self.assertEqual(fake["log"], ["list", "status"])
 
     def test_guests_arriving_delete_family_photos_before_uploading(self):
         t = self.tv()
@@ -269,6 +283,65 @@ class SyncTests(Base):
         # Frame asked the TV to let it in (someone pressed Allow), and doesn't nag it again soon.
         self.assertEqual((new.token, new.error), ("tok-10.0.0.5", ""))
         self.assertFalse(sync.maybe_pair(new))
+
+    def test_slideshow_is_sent_again_after_showing_a_new_photo(self):
+        """Picking a photo can stop the TV's slideshow, so it must be restarted every time."""
+        t = self.tv()
+        self.family(1)
+        sync.sync_tv(t)
+        fake = FakeTV.tvs[t.host]
+        fake["log"].clear()
+        self.family(1)
+        sync.sync_tv(t)
+        kinds = [e[0] if isinstance(e, tuple) else e for e in fake["log"]]
+        self.assertLess(kinds.index("show"), kinds.index("slideshow"))
+        self.assertEqual(fake["slideshow"], (15, True))
+
+    def test_slideshow_the_tv_lost_is_restored(self):
+        """A reboot (or someone in the TV's menus) turns the slideshow off; the next visit puts it back."""
+        t = self.tv()
+        self.family(2)
+        sync.sync_tv(t)
+        fake = FakeTV.tvs[t.host]
+        fake["slideshow"] = None
+        sync.sync_tv(t)
+        self.assertEqual(fake["slideshow"], (15, True))
+        fake["slideshow"] = (60, False)
+        sync.sync_tv(t)
+        self.assertEqual(fake["slideshow"], (15, True))
+
+    def test_interval_change_reaches_the_tv(self):
+        t = self.tv()
+        self.family(2)
+        sync.sync_tv(t)
+        service.set_interval("3")
+        sync.sync_tv(t)
+        self.assertEqual(FakeTV.tvs[t.host]["slideshow"], (3, True))
+
+    def test_unchanged_tv_is_not_visited_every_minute(self):
+        """Every visit opens a connection the TV has to handle; leave it be when nothing changed."""
+        t = self.tv()
+        self.family(1)
+        with patch("frame.sync.RECHECK", 600):
+            sync.sync_tv(t)
+            fake = FakeTV.tvs[t.host]
+            fake["log"].clear()
+            self.assertTrue(sync.sync_tv(t))
+            self.assertEqual(fake["log"], [])
+            self.family(1)  # something changed: visit now
+            sync.sync_tv(t)
+            self.assertIn("list", fake["log"])
+            fake["log"].clear()
+            service.set_interval("60")
+            sync.sync_tv(t)
+            self.assertEqual(fake["slideshow"], (60, True))
+            # Turned off (or the power cut): everything is checked when it's back.
+            fake["log"].clear()
+            saved = FakeTV.tvs.pop(t.host)
+            sync.sync_tv(t)
+            FakeTV.tvs[t.host] = saved
+            sync.sync_tv(t)
+            self.assertIn("status", fake["log"])
 
     def test_tv_error_is_recorded(self):
         t = self.tv()
@@ -501,6 +574,177 @@ class ImageTests(SimpleTestCase):
             images.prepare(b"not a photo")
 
 
+class IntervalTests(Base):
+    """Anyone using the app may change how often the TVs change photo."""
+
+    def setUp(self):
+        super().setUp()
+        self.admin = get_user_model().objects.create_user("stefan", password="x", is_staff=True)
+        self.c = Client()
+
+    def post(self, url, value):
+        return self.c.post(url, json.dumps({"interval": value}), content_type="application/json")
+
+    def test_default_and_old_hub_setting_carried_over(self):
+        self.assertEqual(service.interval(), "15")
+        service._last_interval = None
+        self.settings["interval"] = "60"  # set in hub Settings before b6
+        self.assertEqual(service.interval(), "60")
+        self.settings["interval"] = "3"
+        self.assertEqual(service.interval(), "60")  # copied once; the app owns it now
+
+    def test_guest_changes_it(self):
+        self.hub_stay = cur()
+        gs = service.evaluate()
+        s = self.c.get(reverse("frame_state")).json()
+        self.assertEqual((s["role"], s["interval"]), ("guest", "15"))
+        self.assertIn(["3", "3 minutes"], s["intervals"])
+        self.assertEqual(self.post(reverse("frame_interval"), "3").status_code, 200)
+        self.assertEqual(service.interval(), "3")
+        self.assertEqual(self.post(reverse("frame_guest_interval", args=[gs.link_secret]), "60").status_code, 200)
+        self.assertEqual(service.interval(), "60")
+
+    def test_family_link_and_admin_change_it(self):
+        token = signing.dumps({"f": 1}, salt=views.FAMILY_SALT, compress=False)
+        self.assertEqual(self.post(reverse("frame_guest_interval", args=[token]), "720").status_code, 200)
+        self.assertEqual(service.interval(), "720")
+        self.c.force_login(self.admin)
+        self.assertEqual(self.post(reverse("frame_interval"), "1440").status_code, 200)
+        self.assertEqual(self.c.get(reverse("frame_state")).json()["interval"], "1440")
+
+    def test_bad_values_and_nobody_signed_in(self):
+        self.c.force_login(self.admin)
+        for bad in ("7", "", None, "15; drop"):
+            self.assertEqual(self.post(reverse("frame_interval"), bad).status_code, 400)
+        self.assertEqual(service.interval(), "15")
+        self.c.logout()  # wall screen, no stay: no role
+        self.assertEqual(self.post(reverse("frame_interval"), "3").status_code, 403)
+        self.assertNotIn("interval", self.c.get(reverse("frame_state")).json())
+        self.assertEqual(self.post(reverse("frame_guest_interval", args=["nope"]), "3").status_code, 404)
+
+
+class PairingTests(Base):
+    """The TVs page: an admin pairs a TV and is told what went wrong."""
+
+    def setUp(self):
+        super().setUp()
+        self.admin = get_user_model().objects.create_user("stefan", password="x", is_staff=True)
+        self.c = Client()
+        make_fake_tv("192.168.10.124")
+        self.office = TV.objects.create(name="Office television", host="192.168.10.124", uid="uuid-o")
+
+    def pair(self, pairer):
+        tvlib.set_factory(FakeTV, pairer=pairer)
+        self.c.force_login(self.admin)
+        return self.c.post(reverse("frame_tv_pair", args=[self.office.id]))
+
+    def office_row(self, data):
+        return next(t for t in data["tvs"] if t["id"] == self.office.id)
+
+    def test_admin_only(self):
+        self.assertEqual(self.c.get(reverse("frame_tvs")).status_code, 403)
+        self.assertEqual(self.c.get(reverse("frame_tvs_state")).status_code, 403)
+        self.assertEqual(self.c.post(reverse("frame_tv_pair", args=[self.office.id])).status_code, 403)
+        self.assertEqual(self.c.post(reverse("frame_tvs_scan")).status_code, 403)
+        self.hub_stay = cur()  # a guest is no admin either
+        service.evaluate()
+        self.assertEqual(self.c.get(reverse("frame_tvs")).status_code, 403)
+        self.assertEqual(self.office.token, "")
+
+    def test_page_lists_tvs_with_the_steps(self):
+        self.c.force_login(self.admin)
+        r = self.c.get(reverse("frame_tvs"))
+        self.assertContains(r, "Access Notification")
+        self.assertContains(r, "Office television")
+        row = self.office_row(self.c.get(reverse("frame_tvs_state")).json())
+        self.assertEqual((row["paired"], row["pair"]), (False, None))
+
+    def test_pair_now_ignores_the_half_hour_wait(self):
+        sync.maybe_pair(self.office)  # the worker asked a minute ago (nobody answered)
+        TV.objects.filter(id=self.office.id).update(token="")
+        sync._pair_status.clear()
+        r = self.pair(lambda host: "tok-new")
+        self.assertEqual(r.status_code, 200)
+        self.office.refresh_from_db()
+        self.assertEqual(self.office.token, "tok-new")
+        self.assertEqual(self.office_row(r.json())["pair"]["state"], "paired")
+        self.assertEqual(self.c.post(reverse("frame_tv_pair", args=[self.office.id])).status_code, 400)
+
+    def test_each_failure_says_what_to_do(self):
+        def raises(exc):
+            def f(host):
+                raise exc
+            return f
+        for exc, state in ((tvlib.PairDenied("no"), "denied"), (tvlib.PairTimeout("slow"), "timeout"),
+                           (tvlib.Standby("off"), "standby"), (tvlib.Offline("gone"), "offline"),
+                           (RuntimeError("weird"), "failed")):
+            sync._pair_status.clear()
+            r = self.pair(raises(exc))
+            self.assertEqual(self.office_row(r.json())["pair"]["state"], state, exc)
+            self.office.refresh_from_db()
+            self.assertEqual(self.office.token, "")
+
+    def test_pair_errors_from_the_tv_library(self):
+        class UnauthorizedError(Exception):
+            pass
+        self.assertIsInstance(tvlib.pair_error(UnauthorizedError("x")), tvlib.PairDenied)
+        self.assertIsInstance(tvlib.pair_error(TimeoutError("timed out")), tvlib.PairTimeout)
+        self.assertIsInstance(tvlib.pair_error(ConnectionRefusedError("refused")), tvlib.Offline)
+
+    def test_pairing_asks_only_a_tv_that_is_on(self):
+        with patch("frame.tv.describe", return_value={"on": False}):
+            with self.assertRaises(tvlib.Standby):
+                tvlib.pair("192.168.10.124")
+
+    def test_look_now(self):
+        self.c.force_login(self.admin)
+        with patch("frame.worker.poke") as poke:
+            self.assertTrue(self.c.post(reverse("frame_tvs_scan")).json()["looking"])
+        poke.assert_called_once()
+        self.assertIsNone(worker._last_discover)
+        with patch("frame.discovery.discover"):
+            worker._discover_if_due()
+        self.assertFalse(worker.discovering())
+
+
+class DeadlineTests(SimpleTestCase):
+    """A TV that never answers must not hang the worker (seen: stuck mid-upload for good)."""
+
+    def test_call_past_its_deadline_fails(self):
+        import threading
+        import time as t
+
+        gone = threading.Event()
+
+        class Sock:
+            def shutdown(self, how):
+                gone.set()
+
+        class Art:
+            connection = type("C", (), {"sock": Sock()})()
+
+            def close(self):
+                pass
+
+        def stuck(art):
+            if not gone.wait(5):  # samsungtvws waits like this, forever
+                return "never"
+            raise OSError("socket shut")
+
+        c = tvlib.FrameClient("10.0.0.1", "tok")
+        c._art = Art()
+        start = t.monotonic()
+        with self.assertRaisesRegex(tvlib.TVError, "stopped answering"):
+            c._call(stuck, deadline=0.2)
+        self.assertLess(t.monotonic() - start, 2)
+        # A quick call is unaffected and the next call starts a fresh timer.
+        c._art = Art()
+        gone.clear()
+        self.assertEqual(c._call(lambda art: "ok", deadline=0.2), "ok")
+        t.sleep(0.4)
+        self.assertFalse(gone.is_set())
+
+
 class PluginTests(SimpleTestCase):
     def test_plugin_importable(self):
         assert_plugin_importable("frame.plugin")
@@ -517,6 +761,8 @@ class PluginTests(SimpleTestCase):
         by_key = {x.key: x for x in spec.settings}
         self.assertEqual(by_key["skip_tvs"].choices_from, "frame.discovery.tv_choices")
         self.assertIn("scan_subnets", by_key)
+        self.assertNotIn("interval", by_key)  # set in the app, by anyone using it
+        self.assertEqual([(pg.title, pg.url_name) for pg in spec.settings_pages], [("TVs", "frame_tvs")])
         js = (ROOT / "static" / "frame" / "frame.js").read_text()
         self.assertNotIn("add-tv", js)  # TVs are managed in Settings, not in the app
 

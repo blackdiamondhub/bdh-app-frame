@@ -17,15 +17,45 @@ log = logging.getLogger(__name__)
 
 #: How often Frame asks an unpaired TV to let it in (each ask pops up on the TV).
 PAIR_RETRY = 30 * 60
+#: How long a pairing result (denied, timed out...) is shown on the TVs page.
+PAIR_RESULT_FOR = 10 * 60
+#: A TV whose photos and slideshow haven't changed is only re-checked this
+#: often (every check opens a connection to the TV; they don't like many).
+RECHECK = 10 * 60
 
 _pair_tries = {}  # tv id -> time.monotonic() of the last ask
+_pair_status = {}  # tv id -> {"state", "message", "at"}
 _pair_lock = threading.Lock()
+_synced = {}  # tv id -> (fingerprint, time.monotonic()) of the last good sync
+
+#: Pairing states shown on the TVs page.
+WAITING, PAIRED, DENIED, TIMEOUT, STANDBY, OFFLINE, FAILED = (
+    "waiting", "paired", "denied", "timeout", "standby", "offline", "failed")
 
 
 def pair_waiting(tv_id):
     """True while the TV is showing Frame's Allow prompt."""
-    last = _pair_tries.get(tv_id)
-    return last is not None and time.monotonic() - last < tvlib.PAIR_TIMEOUT + 5
+    st = _pair_status.get(tv_id)
+    return bool(st) and st["state"] == WAITING and time.monotonic() - st["at"] < tvlib.PAIR_TIMEOUT + 5
+
+
+def pair_status(tv_id):
+    """The last pairing attempt for the TVs page: ``{"state", "message", "seconds_left"}`` or None."""
+    st = _pair_status.get(tv_id)
+    if not st:
+        return None
+    age = time.monotonic() - st["at"]
+    if st["state"] == WAITING:
+        if age >= tvlib.PAIR_TIMEOUT + 5:
+            return None
+        return {"state": WAITING, "message": "", "seconds_left": max(0, int(tvlib.PAIR_TIMEOUT - age))}
+    if age >= PAIR_RESULT_FOR:
+        return None
+    return {"state": st["state"], "message": st["message"], "seconds_left": 0}
+
+
+def _set_pair_status(tv_id, state, message=""):
+    _pair_status[tv_id] = {"state": state, "message": message[:200], "at": time.monotonic()}
 
 
 def _close_db():
@@ -35,15 +65,32 @@ def _close_db():
 def _pair(tv_id, host):
     try:
         token = tvlib.do_pair(host)
-    except tvlib.TVError as exc:
-        log.info("TV %s at %s didn't pair: %s", tv_id, host, exc)
+    except tvlib.Standby as exc:
+        _set_pair_status(tv_id, STANDBY, str(exc))
+    except tvlib.Offline as exc:
+        _set_pair_status(tv_id, OFFLINE, str(exc))
+    except tvlib.PairDenied as exc:
+        _set_pair_status(tv_id, DENIED, str(exc))
+    except tvlib.PairTimeout as exc:
+        _set_pair_status(tv_id, TIMEOUT, str(exc))
+    except Exception as exc:  # noqa: BLE001 - shown on the TVs page
+        _set_pair_status(tv_id, FAILED, str(exc) or type(exc).__name__)
+    else:
+        try:
+            TV.objects.filter(id=tv_id).update(token=token, error="")
+        finally:
+            _close_db()
+        _set_pair_status(tv_id, PAIRED)
+        log.info("TV %s at %s paired", tv_id, host)
+        service.wake_worker()
         return
-    try:
-        TV.objects.filter(id=tv_id).update(token=token, error="")
-    finally:
-        _close_db()
-    log.info("TV %s at %s paired", tv_id, host)
-    service.wake_worker()
+    log.info("TV %s at %s didn't pair: %s", tv_id, host, _pair_status[tv_id]["state"])
+
+
+def _start_pair(t, now):
+    _pair_tries[t.id] = now
+    _set_pair_status(t.id, WAITING)
+    _spawn(_pair, t.id, t.host)
 
 
 def maybe_pair(t):
@@ -53,8 +100,16 @@ def maybe_pair(t):
         last = _pair_tries.get(t.id)
         if last is not None and now - last < PAIR_RETRY:
             return False
-        _pair_tries[t.id] = now
-    _spawn(_pair, t.id, t.host)
+        _start_pair(t, now)
+    return True
+
+
+def pair_now(t):
+    """An admin pressed Pair: ask the TV right away (unless it's already asking)."""
+    with _pair_lock:
+        if pair_waiting(t.id):
+            return False
+        _start_pair(t, time.monotonic())
     return True
 
 
@@ -87,9 +142,11 @@ def sync_tv(t, active=None, use=True):
     """Sync one TV; returns True if it is now up to date. ``use=False`` empties it."""
     try:
         if not tvlib.describe(t.host)["on"]:
+            _synced.pop(t.id, None)  # it may lose its slideshow while off: check it all when it's back
             _mark(t, online=False)
             return False
     except tvlib.Offline:
+        _synced.pop(t.id, None)
         _mark(t, online=False)
         return False
     now = timezone.now()
@@ -98,24 +155,40 @@ def sync_tv(t, active=None, use=True):
         if use:
             maybe_pair(t)
         return False
+    wanted = service.wanted_on(t, active) if use else []
+    fp = _fingerprint(t, wanted, use)
+    last = _synced.get(t.id)
+    if last and last[0] == fp and time.monotonic() - last[1] < RECHECK and not t.error:
+        _mark(t, online=True, last_seen=now)
+        return True
     client = tvlib.client(t.host, t.token)
     try:
-        return _sync(t, client, active, now, use)
+        ok = _sync(t, client, wanted, now, use)
     except tvlib.NotPaired as exc:
+        _synced.pop(t.id, None)
         _mark(t, online=True, last_seen=now, token="", error="The TV stopped allowing Frame; it will ask again")
         log.warning("%s unpaired: %s", t, exc)
         return False
     except tvlib.TVError as exc:
+        _synced.pop(t.id, None)
         _mark(t, online=True, last_seen=now, error=str(exc)[:250])
         log.warning("%s: %s", t, exc)
         return False
     finally:
         client.close()
+    _synced[t.id] = (_fingerprint(t, wanted, use), time.monotonic())
+    return ok
 
 
-def _sync(t, client, active, now, use=True):
+def _fingerprint(t, wanted, use):
+    """What Frame wants on ``t``; when it is unchanged the TV needs no visit."""
+    return (use, tuple(p.id for p in wanted), service.slideshow_value(bool(wanted)),
+            service.setting("matte", "none"),
+            tuple(Placement.objects.filter(tv=t).order_by("id").values_list("id", "photo_id")))
+
+
+def _sync(t, client, wanted, now, use=True):
     on_tv = client.my_photos()
-    wanted = service.wanted_on(t, active) if use else []
     wanted_ids = {p.id for p in wanted}
     placements = list(Placement.objects.filter(tv=t))
 
@@ -144,28 +217,40 @@ def _sync(t, client, active, now, use=True):
         on_tv.add(cid)
         uploaded.append(p)
 
-    # 3. Slideshow over My Photos (off when there's nothing of ours to show).
-    ours = set(placed.values())
-    show = service.slideshow_value(bool(ours))
-    if show != t.slideshow:
-        if show == "off":
-            client.set_slideshow(0, False)
-        else:
-            minutes, shuffle = show.split(":")
-            client.set_slideshow(int(minutes), shuffle == "1")
-        t.slideshow = show
-
-    # 4. Show a just-added photo right away (otherwise it waits its turn in the
+    # 3. Show a just-added photo right away (otherwise it waits its turn in the
     # slideshow), and never leave a photo that's no longer wanted on screen.
+    ours = set(placed.values())
+    showed = False
     if ours and client.art_mode():
         cur = client.current()
         if uploaded:
             newest = max(uploaded, key=lambda p: p.added_at)
             client.show(placed[newest.id])
+            showed = True
         # Something we just took off is still on screen. Anything else (their
         # own photo, Samsung art) was picked on the TV; leave it.
         elif cur in deleted or (cur.startswith("MY_") and cur not in on_tv):
             client.show(placed[wanted[0].id])
+            showed = True
+
+    # 4. Slideshow over My Photos (off when there's nothing of ours to show).
+    # Asked of the TV, not remembered: a reboot or someone using the TV's
+    # menus can change it. Picking a photo (step 3) can stop it, so it is
+    # always sent again after that.
+    show = service.slideshow_value(bool(ours))
+    try:
+        on = client.slideshow()
+    except tvlib.NotPaired:
+        raise
+    except tvlib.TVError:  # an older TV that can't say: trust what Frame last sent
+        on = t.slideshow
+    if show != on or (showed and show != "off"):
+        if show == "off":
+            client.set_slideshow(0, False)
+        else:
+            minutes, shuffle = show.split(":")
+            client.set_slideshow(int(minutes), shuffle == "1")
+    t.slideshow = show
 
     _mark(t, online=True, last_seen=now, last_sync=now, error="",
           unmanaged=len(on_tv - ours), slideshow=t.slideshow)

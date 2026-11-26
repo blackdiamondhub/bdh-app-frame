@@ -1,4 +1,4 @@
-from bdh_sdk import PluginSpec, Setting, Tile
+from bdh_sdk import PluginSpec, Setting, SettingsPage, Tile
 from bdh_sdk.plugins import BOOL, CHOICE, LIFECYCLE_ALWAYS, MULTI, NETWORK_LAN
 
 MATTES = (
@@ -20,10 +20,7 @@ spec = PluginSpec(
              subtitle="Your photos on the Frame TVs", order=40),
     ),
     settings=(
-        # The Frame's own slideshow only offers these intervals.
-        Setting("interval", "Change photo every", type=CHOICE, default="15",
-                choices=(("3", "3 minutes"), ("15", "15 minutes"), ("60", "1 hour"),
-                         ("720", "12 hours"), ("1440", "1 day"))),
+        # How often the TVs change photo is set in the app itself (anyone using it can).
         Setting("shuffle", "Shuffle", type=BOOL, default=True),
         Setting("matte", "Matte for new photos", type=CHOICE, default="none", choices=MATTES),
         Setting("guest_uploads", "Guests can add photos during their stay", type=BOOL, default=True,
@@ -31,11 +28,15 @@ spec = PluginSpec(
         Setting("skip_tvs", "Leave these TVs alone", type=MULTI, default=None,
                 choices_from="frame.discovery.tv_choices",
                 help="Frame uses every Frame TV it finds on the network (it looks every 10 minutes; "
-                     "the TV must be on). A new TV asks you to press Allow on it. Tick a TV to take "
+                     "the TV must be on). Pair new TVs on the TVs page above. Tick a TV to take "
                      "Frame's photos off it and leave it alone."),
         Setting("scan_subnets", "Also look for TVs on", default="",
                 help="Other subnets with Frame TVs, e.g. 192.168.11.0/24 (the hub's own network "
                      "is always searched)."),
+    ),
+    settings_pages=(
+        SettingsPage("TVs", "frame_tvs", subtitle="Pair Frame TVs and see how they are doing",
+                     icon="fas fa-tv"),
     ),
     api_version=2,
     # Who is staying decides whether family or guest photos are on the TVs.

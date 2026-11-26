@@ -16,7 +16,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from bdh_sdk.settings import app_setting, as_bool
-from bdh_sdk.storage import app_media
+from bdh_sdk.storage import app_media, app_state
 
 from . import images, stay
 from .models import FAMILY, GUEST, GuestStay, Photo
@@ -223,11 +223,62 @@ def wanted_on(tv, active=None):
 def slideshow_value(has_photos):
     if not has_photos:
         return "off"
+    return f"{interval()}:{1 if flag('shuffle', True) else 0}"
+
+
+# --- how often the TVs change photo (anyone using the app can change it) -----------
+
+#: The Frame's own slideshow only offers these (minutes, label).
+INTERVALS = (("3", "3 minutes"), ("15", "15 minutes"), ("60", "1 hour"),
+             ("720", "12 hours"), ("1440", "1 day"))
+DEFAULT_INTERVAL = "15"
+
+
+def _valid_interval(value):
+    value = str(value or "").strip()
+    return value if value in dict(INTERVALS) else None
+
+
+_last_interval = None
+
+
+def interval():
+    """Minutes between photos, as a string from :data:`INTERVALS`.
+
+    Kept in the app's state; before anyone sets it there, the old admin
+    setting (hub Settings) is copied over, so upgrading keeps the TVs as
+    they were. If the hub can't be asked, the last answer is used.
+    """
+    global _last_interval
     try:
-        minutes = int(setting("interval", "15"))
-    except (TypeError, ValueError):
-        minutes = 15
-    return f"{minutes}:{1 if flag('shuffle', True) else 0}"
+        raw = app_state(APP).get("interval")
+    except Exception:  # noqa: BLE001 - broker hiccup
+        log.warning("Couldn't read the photo interval", exc_info=True)
+        return _last_interval or DEFAULT_INTERVAL
+    v = _valid_interval(raw)
+    if v is None:
+        try:
+            v = _valid_interval(setting("interval", None))
+        except Exception:  # noqa: BLE001
+            v = None
+        if v and raw is None:
+            try:
+                app_state(APP).set("interval", v)
+            except Exception:  # noqa: BLE001
+                pass
+    _last_interval = v or DEFAULT_INTERVAL
+    return _last_interval
+
+
+def set_interval(value):
+    global _last_interval
+    v = _valid_interval(value)
+    if v is None:
+        raise Invalid("Pick one of the times on the list")
+    app_state(APP).set("interval", v)
+    _last_interval = v
+    wake_worker()
+    return v
 
 
 # --- worker hook -------------------------------------------------------------------
