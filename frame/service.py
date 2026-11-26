@@ -165,10 +165,10 @@ def _save(st, name, data):
 def _tvs(tv_ids):
     if tv_ids is None:
         return None
-    from .discovery import enabled_tvs
+    from .discovery import usable_tvs
 
     ids = {int(i) for i in tv_ids if str(i).isdigit()}
-    tvs = [t for t in enabled_tvs() if t.id in ids]
+    tvs = [t for t in usable_tvs() if t.id in ids]
     if not tvs:
         raise Invalid("Pick at least one TV")
     return tvs

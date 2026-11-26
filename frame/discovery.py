@@ -155,6 +155,11 @@ def enabled_tvs():
     return [t for t in TV.objects.all() if enabled(t, skip)]
 
 
+def usable_tvs():
+    """The TVs people see in the app: not left alone, and paired (someone pressed Allow)."""
+    return [t for t in enabled_tvs() if t.token]
+
+
 def tv_choices():
     """The Settings page's "Leave these TVs alone" checkboxes: every Frame found so far."""
     out = []
