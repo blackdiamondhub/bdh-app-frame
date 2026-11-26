@@ -122,6 +122,7 @@ class Base(TestCase):
         sync._pair_tries.clear()
         sync._pair_status.clear()
         sync._synced.clear()
+        sync._restart.clear()
         p_re = patch("frame.sync.RECHECK", 0)  # every sync visits the TV unless a test says otherwise
         p_re.start()
         self.addCleanup(p_re.stop)
@@ -296,6 +297,27 @@ class SyncTests(Base):
         kinds = [e[0] if isinstance(e, tuple) else e for e in fake["log"]]
         self.assertLess(kinds.index("show"), kinds.index("slideshow"))
         self.assertEqual(fake["slideshow"], (15, True))
+
+    def test_start_slideshow_button(self):
+        """The TV sat on the Art Mode menu with the slideshow on (seen at Sun Peaks): the button
+        puts one of our photos on screen and sends the slideshow again, even on an unchanged TV."""
+        t = self.tv()
+        self.family(2)
+        sync.sync_tv(t)
+        fake = FakeTV.tvs[t.host]
+        fake["log"].clear()
+        sync.sync_tv(t)
+        self.assertNotIn("show", [e[0] for e in fake["log"] if isinstance(e, tuple)])  # nothing to do
+        fake["current"] = "SAM-S0001"  # Samsung art picked from the menu
+        sync.restart_slideshows()
+        sync.sync_tv(t)
+        shows = [e for e in fake["log"] if isinstance(e, tuple) and e[0] == "show"]
+        self.assertEqual(len(shows), 1)
+        self.assertIn(shows[0][1], set(Placement.objects.filter(tv=t).values_list("content_id", flat=True)))
+        self.assertEqual(fake["log"][-1], ("slideshow", 15, True))
+        fake["log"].clear()
+        sync.sync_tv(t)  # done once, not on every pass
+        self.assertEqual([e for e in fake["log"] if isinstance(e, tuple)], [])
 
     def test_slideshow_the_tv_lost_is_restored(self):
         """A reboot (or someone in the TV's menus) turns the slideshow off; the next visit puts it back."""
@@ -611,6 +633,18 @@ class IntervalTests(Base):
         self.c.force_login(self.admin)
         self.assertEqual(self.post(reverse("frame_interval"), "1440").status_code, 200)
         self.assertEqual(self.c.get(reverse("frame_state")).json()["interval"], "1440")
+
+    def test_anyone_using_the_app_can_start_the_slideshow(self):
+        tv = TV.objects.create(name="Living Room", host="10.0.0.9", token="tok")
+        with patch("frame.worker.poke") as poke:
+            self.assertEqual(self.c.post(reverse("frame_restart")).status_code, 403)  # wall screen
+            self.hub_stay = cur()
+            gs = service.evaluate()
+            self.assertEqual(self.c.post(reverse("frame_restart")).status_code, 200)
+            self.assertEqual(self.c.post(reverse("frame_guest_restart", args=[gs.link_secret])).status_code, 200)
+            self.assertEqual(self.c.post(reverse("frame_guest_restart", args=["nope"])).status_code, 404)
+        self.assertEqual(poke.call_count, 2)
+        self.assertEqual(sync._restart, {tv.id})
 
     def test_bad_values_and_nobody_signed_in(self):
         self.c.force_login(self.admin)

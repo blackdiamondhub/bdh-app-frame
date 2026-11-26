@@ -43,9 +43,14 @@
     if (state.intervals) {
       h += '<div class="fr-label">Change photo every</div><div class="fr-chips">' + state.intervals.map(function (c) {
         return '<button class="fr-chip' + (c[0] === state.interval ? " on" : "") + '" data-interval="' + esc(c[0]) + '">' + esc(c[1]) + "</button>";
-      }).join("") + "</div>";
+      }).join("") + "</div>" + '<button class="fr-btn fr-restart" data-restart><i class="fas fa-play"></i> Start slideshow</button>';
     }
     view.innerHTML = h;
+  }
+
+  function restart() {
+    F.api(root.dataset.restartUrl, {}).then(function () { F.toast("Starting the slideshow"); })
+      .catch(function (e) { F.toast(e.message, true); });
   }
 
   function changeInterval(v) {
@@ -101,6 +106,7 @@
     var d = el.dataset;
     if (d.target) { target = F.toggle(target, d.target); render(); return; }
     if (d.interval) { changeInterval(d.interval); return; }
+    if (d.restart !== undefined) { restart(); return; }
     if (d.photo) { e.stopPropagation(); openSheet(d.photo); return; }
     if (d.sheetTv && sheet) {
       sheet.tvs = F.toggle(sheet.tvs, d.sheetTv);

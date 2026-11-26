@@ -5,6 +5,7 @@ go up). Photos on the TV that Frame didn't upload are never touched.
 """
 import logging
 import threading
+import random
 import time
 
 from django import db
@@ -27,6 +28,14 @@ _pair_tries = {}  # tv id -> time.monotonic() of the last ask
 _pair_status = {}  # tv id -> {"state", "message", "at"}
 _pair_lock = threading.Lock()
 _synced = {}  # tv id -> (fingerprint, time.monotonic()) of the last good sync
+_restart = set()  # tv ids to put back on a photo with the slideshow running
+
+
+def restart_slideshows():
+    """Someone pressed Start slideshow: on the next pass every TV in Art Mode
+    shows one of our photos (which also leaves the Art Mode menu) and the
+    slideshow is sent again."""
+    _restart.update(TV.objects.exclude(token="").values_list("id", flat=True))
 
 #: Pairing states shown on the TVs page.
 WAITING, PAIRED, DENIED, TIMEOUT, STANDBY, OFFLINE, FAILED = (
@@ -158,7 +167,7 @@ def sync_tv(t, active=None, use=True):
     wanted = service.wanted_on(t, active) if use else []
     fp = _fingerprint(t, wanted, use)
     last = _synced.get(t.id)
-    if last and last[0] == fp and time.monotonic() - last[1] < RECHECK and not t.error:
+    if last and last[0] == fp and time.monotonic() - last[1] < RECHECK and not t.error and t.id not in _restart:
         _mark(t, online=True, last_seen=now)
         return True
     client = tvlib.client(t.host, t.token)
@@ -176,6 +185,7 @@ def sync_tv(t, active=None, use=True):
         return False
     finally:
         client.close()
+        _restart.discard(t.id)
     _synced[t.id] = (_fingerprint(t, wanted, use), time.monotonic())
     return ok
 
@@ -231,6 +241,9 @@ def _sync(t, client, wanted, now, use=True):
         # own photo, Samsung art) was picked on the TV; leave it.
         elif cur in deleted or (cur.startswith("MY_") and cur not in on_tv):
             client.show(placed[wanted[0].id])
+            showed = True
+        elif t.id in _restart:
+            client.show(cur if cur in ours else random.choice(sorted(ours)))
             showed = True
 
     # 4. Slideshow over My Photos (off when there's nothing of ours to show).

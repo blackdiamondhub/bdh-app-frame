@@ -113,7 +113,14 @@
       state.intervals.map(function (c) {
         return '<button class="fr-chip' + (c[0] === state.interval ? " on" : "") + '" data-interval="' + esc(c[0]) + '">' +
           esc(c[1]) + "</button>";
-      }).join("") + "</div></div>";
+      }).join("") + "</div>" + '<button class="fr-btn fr-restart" data-restart><i class="fas fa-play"></i> Start slideshow</button>' +
+      '<p class="fr-note">TV stuck on the Art Mode menu, or not changing photo? Start slideshow puts it back on your photos.</p></div>';
+  }
+
+  function restart() {
+    F.api(root.dataset.restartUrl, {})
+      .then(function () { F.toast("Starting the slideshow on the TVs in Art Mode"); })
+      .catch(function (e) { F.toast(e.message, true); });
   }
 
   function intervalLabel(v) {
@@ -232,6 +239,7 @@
     var d = el.dataset;
     if (d.tab) { tab = d.tab; selected = {}; render(); return; }
     if (d.interval) { changeInterval(d.interval); return; }
+    if (d.restart !== undefined) { restart(); return; }
     if (d.remove) {
       e.stopPropagation();
       if (state.role === "admin") { selected = {}; selected[d.remove] = true; render(); }
