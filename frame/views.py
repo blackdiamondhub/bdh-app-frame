@@ -2,6 +2,7 @@ import json
 import logging
 
 from django.core import signing
+from django.core.exceptions import PermissionDenied
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
@@ -11,8 +12,8 @@ from django.views.decorators.http import require_GET, require_POST
 
 from bdh_sdk.auth import is_admin
 
-from . import discovery, images, service, sync
-from .models import FAMILY, GUEST, GuestStay, Photo, Placement
+from . import discovery, images, service, sync, tv as tvlib, worker
+from .models import FAMILY, GUEST, TV, GuestStay, Photo, Placement
 
 log = logging.getLogger(__name__)
 
@@ -145,10 +146,12 @@ def _state(request, who):
             out["stay"]["link"] = _link(request, stay)
     if who.role == ADMIN:
         out["settings"] = {
-            "interval": str(service.setting("interval", "15")),
             "shuffle": service.flag("shuffle", True),
             "matte": str(service.setting("matte", "none")),
         }
+    if who.role is not None:
+        out["interval"] = service.interval()
+        out["intervals"] = [list(c) for c in service.INTERVALS]
     return out
 
 
@@ -237,9 +240,28 @@ def _thumb(who, photo_id):
     return resp
 
 
+def _set_interval(request, who):
+    """Anyone who can use the app may change how often the TVs change photo."""
+    if who.role is None:
+        return _error("Changing the TVs isn't open right now", 403)
+    data = _body(request)
+    if data is None:
+        return _error("Expected a JSON object")
+    try:
+        v = service.set_interval(data.get("interval"))
+    except service.Invalid as exc:
+        return _error(exc)
+    return JsonResponse({"interval": v})
+
+
 @require_POST
 def api_upload(request):
     return _upload(request, _who(request))
+
+
+@require_POST
+def api_interval(request):
+    return _set_interval(request, _who(request))
 
 
 @require_POST
@@ -297,6 +319,14 @@ def guest_upload(request, secret):
 
 
 @require_POST
+def guest_interval(request, secret):
+    who = _who_link(secret)
+    if who.role is None:
+        return _error("This link has expired", 404)
+    return _set_interval(request, who)
+
+
+@require_POST
 def guest_photo(request, secret, photo_id):
     who = _who_link(secret)
     if who.role is None:
@@ -310,3 +340,58 @@ def guest_thumb(request, secret, photo_id):
     if who.role is None:
         raise Http404
     return _thumb(who, photo_id)
+
+
+# --- admin: the TVs page (hub Settings -> Frame TV -> TVs) ------------------------------
+
+def _admin_only(request):
+    if not is_admin(request):
+        raise PermissionDenied
+
+
+def _tv_row(t, skip):
+    return {"id": t.id, "name": t.name, "host": t.host, "model": t.model, "online": t.online,
+            "paired": bool(t.token), "left_alone": not discovery.enabled(t, skip), "error": t.error,
+            "last_seen": t.last_seen.isoformat() if t.last_seen else None,
+            "pair": sync.pair_status(t.id)}
+
+
+def _tvs_data():
+    skip = discovery.skipped()
+    tvs = [t for t in TV.objects.all() if not t.host.startswith(discovery.MOVED)]
+    return {"tvs": [_tv_row(t, skip) for t in tvs], "looking": worker.discovering(),
+            "pair_seconds": tvlib.PAIR_TIMEOUT}
+
+
+@never_cache
+@require_GET
+def tvs_page(request):
+    _admin_only(request)
+    return render(request, "frame/settings_tvs.html", {"active": "frame", "data": _tvs_data()})
+
+
+@never_cache
+@require_GET
+def api_tvs(request):
+    _admin_only(request)
+    return JsonResponse(_tvs_data())
+
+
+@require_POST
+def api_tv_pair(request, tv_id):
+    """Ask the TV to let Frame in now; the page polls :func:`api_tvs` for the answer."""
+    _admin_only(request)
+    t = TV.objects.filter(id=tv_id).first()
+    if t is None:
+        return _error("That TV is gone", 404)
+    if t.token:
+        return _error("Frame is already paired with this TV")
+    sync.pair_now(t)
+    return JsonResponse(_tvs_data())
+
+
+@require_POST
+def api_tvs_scan(request):
+    _admin_only(request)
+    worker.discover_now()
+    return JsonResponse(_tvs_data())

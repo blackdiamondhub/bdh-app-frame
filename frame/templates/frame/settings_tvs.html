@@ -1,0 +1,217 @@
+{% extends 'hub_settings/_layout.html' %}
+
+{% block title %}TVs · Settings{% endblock %}
+
+{% block section %}
+<style>
+    .ft-row .lbl small { overflow-wrap: anywhere; }
+    .ft-empty { color: var(--mut); padding: 18px 22px; font-size: 14.5px; }
+    .ft-ok { color: #7fd19a; }
+    .ft-warn { color: #e8b04b; }
+    .ft-bad { color: var(--red); }
+    .ft-modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: flex-start; justify-content: center; z-index: 1055; padding: 6vh 16px calc(16px + var(--hub-kb-h, 0px)); box-sizing: border-box; }
+    .ft-modal.open { display: flex; }
+    .ft-box { background: var(--card); border: 1px solid var(--line); border-radius: 22px; width: min(620px, 100%); max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+    .ft-box header { padding: 18px 22px 6px; font-size: 17px; font-weight: 500; }
+    .ft-body { overflow-y: auto; padding: 4px 22px 12px; min-height: 0; font-size: 14.5px; }
+    .ft-steps { margin: 8px 0 0; padding-left: 22px; }
+    .ft-steps li { margin: 10px 0; line-height: 1.45; }
+    .ft-steps small, .ft-tip { display: block; color: var(--mut); font-size: 13px; margin-top: 3px; }
+    .ft-path { font-weight: 500; }
+    #ft-result { margin: 14px 0 0; padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,.05); display: none; line-height: 1.45; }
+    #ft-result.show { display: block; }
+    .ft-count { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 10px; }
+    .ft-foot { border-top: 1px solid var(--line); padding: 14px 22px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .ft-foot .sp { flex: 1; }
+</style>
+
+{% csrf_token %}
+<div class="hst-head">
+    <div>
+        <h2>TVs</h2>
+        <p>The Frame TVs Frame has found. Turn a TV on and Frame finds it within 10 minutes, or press Look now.</p>
+    </div>
+    <div class="act" style="flex-shrink:0;display:flex;gap:8px">
+        <button type="button" class="hst-btn ghost" id="ft-scan">Look now</button>
+        <a class="hst-btn ghost" style="display:flex;align-items:center;white-space:nowrap;text-decoration:none" href="{% url 'hub_settings_app' 'frame' %}">‹ Frame TV settings</a>
+    </div>
+</div>
+
+<div class="hst-card" id="ft-list"></div>
+<p class="hst-note" style="margin-top:12px">To have Frame leave a TV alone, tick it under "Leave these TVs alone" in Frame TV settings.</p>
+
+<div class="ft-modal" id="ft-modal" role="dialog" aria-modal="true" aria-labelledby="ft-title">
+    <div class="ft-box">
+        <header id="ft-title">Pair</header>
+        <div class="ft-body">
+            <p style="margin:0;color:var(--mut)">Frame needs the TV's permission once. Do this at the TV, with its remote:</p>
+            <ol class="ft-steps">
+                <li><b>Turn the TV on</b> so the picture is showing (TV or Art Mode). A TV in standby can't ask.</li>
+                <li><b>Let the TV ask about new devices.</b> On the TV go to
+                    <span class="ft-path">Settings → All Settings → Connection → External Device Manager → Device Connection Manager</span>
+                    and set <b>Access Notification</b> to <b>First Time Only</b>.
+                    <small>If "BDH Frame" is under <b>Device List</b> there as Deny, change it to Allow (or delete it) first.</small></li>
+                <li><b>Press Ask the TV below,</b> then press <b>Allow</b> in the box that pops up on the TV within <span id="ft-secs"></span> seconds.</li>
+            </ol>
+            <div id="ft-result" aria-live="polite"></div>
+            <span class="ft-tip">Tip: to keep the TV reachable when it's off, turn on <span class="ft-path">Settings → All Settings → General → Network → Expert Settings → Power On with Mobile</span>.</span>
+        </div>
+        <div class="ft-foot">
+            <span class="sp"></span>
+            <button type="button" class="hst-btn ghost" id="ft-close">Close</button>
+            <button type="button" class="hst-btn" id="ft-ask">Ask the TV</button>
+        </div>
+    </div>
+</div>
+
+{{ data|json_script:"ft-data" }}
+<script>
+(function () {
+    const STATE_URL = "{% url 'frame_tvs_state' %}";
+    const SCAN_URL = "{% url 'frame_tvs_scan' %}";
+    const PAIR_URL = "{% url 'frame_tv_pair' 0 %}";
+    const csrf = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    const list = document.getElementById('ft-list');
+    const modal = document.getElementById('ft-modal');
+    const result = document.getElementById('ft-result');
+    const ask = document.getElementById('ft-ask');
+    const scan = document.getElementById('ft-scan');
+    let data = JSON.parse(document.getElementById('ft-data').textContent);
+    let pairing = null;  // the TV id the pairing box is open for
+    let timer = null;
+
+    document.getElementById('ft-secs').textContent = data.pair_seconds;
+
+    const RESULTS = {
+        paired: ['ft-ok', 'Paired. Frame puts the photos on this TV within a minute.'],
+        denied: ['ft-bad', 'The TV said no. On the TV, open Device Connection Manager → Device List, set "BDH Frame" to Allow (or delete it), then ask again.'],
+        timeout: ['ft-warn', 'Nobody pressed Allow in time. If no box appeared on the TV, Access Notification is probably off (step 2). Then ask again.'],
+        standby: ['ft-warn', "The TV's screen is off. Turn it on with its remote (step 1), then ask again."],
+        offline: ['ft-bad', "Frame can't reach the TV. Check it's plugged in and on, then ask again."],
+        failed: ['ft-bad', "That didn't work: "],
+    };
+
+    function el(tag, cls, text) {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text != null) e.textContent = text;
+        return e;
+    }
+
+    function status(t) {
+        if (t.left_alone) return ['', 'Left alone'];
+        if (t.pair && t.pair.state === 'waiting') return ['ft-warn', 'Waiting for someone to press Allow on the TV'];
+        if (!t.paired) return ['ft-warn', 'Not paired'];
+        if (!t.online) return ['', 'Off · photos go up when it\u2019s on'];
+        if (t.error) return ['ft-bad', t.error];
+        return ['ft-ok', 'Paired · on'];
+    }
+
+    function render() {
+        list.replaceChildren();
+        scan.disabled = data.looking;
+        scan.textContent = data.looking ? 'Looking\u2026' : 'Look now';
+        if (!data.tvs.length) {
+            list.append(el('div', 'ft-empty', 'No Frame TVs found yet. Turn them on; Frame looks every 10 minutes.'));
+        }
+        for (const t of data.tvs) {
+            const row = el('div', 'hst-row ft-row');
+            const lbl = el('div', 'lbl');
+            lbl.append(el('b', '', t.name));
+            const [cls, text] = status(t);
+            const sub = el('small', '', [t.host, t.model].filter(Boolean).join(' \u00b7 ') + ' \u00b7 ');
+            sub.append(el('span', cls, text));
+            lbl.append(sub);
+            const ctl = el('div', 'ctl');
+            if (!t.paired && !t.left_alone) {
+                const b = el('button', 'hst-btn', 'Pair');
+                b.type = 'button';
+                b.addEventListener('click', () => open(t));
+                ctl.append(b);
+            }
+            row.append(lbl, ctl);
+            list.append(row);
+        }
+        if (pairing !== null) renderPairing();
+    }
+
+    function tv(id) { return data.tvs.find(t => t.id === id); }
+
+    function renderPairing() {
+        const t = tv(pairing);
+        if (!t) { close(); return; }
+        document.getElementById('ft-title').textContent = 'Pair ' + t.name;
+        const p = t.pair;
+        result.replaceChildren();
+        result.className = '';
+        ask.disabled = false;
+        ask.textContent = 'Ask the TV';
+        if (t.paired) {
+            result.className = 'show';
+            result.append(el('span', RESULTS.paired[0], RESULTS.paired[1]));
+            ask.hidden = true;
+            return;
+        }
+        ask.hidden = false;
+        if (!p) return;
+        result.className = 'show';
+        if (p.state === 'waiting') {
+            ask.disabled = true;
+            ask.textContent = 'Asking\u2026';
+            result.append(el('span', 'ft-count', String(p.seconds_left)),
+                          el('span', '', 'Press Allow on the TV now.'));
+            return;
+        }
+        const [cls, text] = RESULTS[p.state] || RESULTS.failed;
+        result.append(el('span', cls, text + (p.state === 'failed' || !RESULTS[p.state] ? p.message : '')));
+    }
+
+    function open(t) {
+        pairing = t.id;
+        modal.classList.add('open');
+        render();
+    }
+
+    function close() {
+        pairing = null;
+        modal.classList.remove('open');
+    }
+
+    async function call(url, method) {
+        const r = await fetch(url, {method: method || 'GET', credentials: 'same-origin', cache: 'no-store',
+                                    headers: {'X-CSRFToken': csrf}});
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.error || ('Error ' + r.status));
+        return body;
+    }
+
+    async function refresh() {
+        try { data = await call(STATE_URL); render(); } catch (e) { /* keep the last list */ }
+        schedule();
+    }
+
+    function schedule() {
+        clearTimeout(timer);
+        const t = pairing !== null && tv(pairing);
+        const busy = data.looking || (t && t.pair && t.pair.state === 'waiting');
+        timer = setTimeout(refresh, busy ? 1000 : 10000);
+    }
+
+    ask.addEventListener('click', async () => {
+        ask.disabled = true;
+        try { data = await call(PAIR_URL.replace('/0/', '/' + pairing + '/'), 'POST'); render(); }
+        catch (e) { result.className = 'show'; result.replaceChildren(el('span', 'ft-bad', e.message)); ask.disabled = false; }
+        schedule();
+    });
+    scan.addEventListener('click', async () => {
+        try { data = await call(SCAN_URL, 'POST'); render(); } catch (e) { /* the list says */ }
+        schedule();
+    });
+    document.getElementById('ft-close').addEventListener('click', close);
+    modal.addEventListener('click', e => { if (e.target === modal) close(); });
+
+    render();
+    schedule();
+})();
+</script>
+{% endblock %}

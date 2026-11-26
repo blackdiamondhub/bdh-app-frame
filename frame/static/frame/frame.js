@@ -106,7 +106,30 @@
     return h;
   }
 
-  var INTERVALS = { "3": "3 min", "15": "15 min", "60": "1 hour", "720": "12 hours", "1440": "1 day" };
+  // How often the TVs change photo. Anyone using the app may change it.
+  function intervalHtml() {
+    if (!state.intervals) return "";
+    return '<div class="fr-interval"><span>Change photo every</span><div class="fr-chips">' +
+      state.intervals.map(function (c) {
+        return '<button class="fr-chip' + (c[0] === state.interval ? " on" : "") + '" data-interval="' + esc(c[0]) + '">' +
+          esc(c[1]) + "</button>";
+      }).join("") + "</div></div>";
+  }
+
+  function intervalLabel(v) {
+    var c = (state.intervals || []).filter(function (x) { return x[0] === v; })[0];
+    return c ? c[1] : v + " minutes";
+  }
+
+  function changeInterval(v) {
+    if (v === state.interval) return;
+    var was = state.interval;
+    state.interval = v;
+    render();
+    F.api(root.dataset.intervalUrl, { interval: v })
+      .then(function () { F.toast("The TVs will change photo every " + intervalLabel(v)); })
+      .catch(function (e) { state.interval = was; render(); F.toast(e.message, true); });
+  }
 
   function tvPanel() {
     var h = '<aside class="fr-card"><div class="fr-card-head"><h2 class="fr-grow">TVs</h2></div>';
@@ -118,12 +141,13 @@
           " in My Photos (not from Frame; left alone, and guests can see them)</div>" : "") +
         "</div></div>";
     });
+    if (root.dataset.tvsUrl) h += '<a class="fr-btn fr-pairlink" target="_top" href="/apps/frame' + esc(root.dataset.tvsUrl) +
+      '"><i class="fas fa-link"></i> Pair a TV</a>';
     var s = state.settings || {};
-    h += '<div class="fr-rows"><div class="fr-row"><span>Change photo every</span><span>' + esc(INTERVALS[s.interval] || s.interval + " min") +
-      '</span></div><div class="fr-row"><span>Order</span><span>' + (s.shuffle ? "Shuffle" : "In order") +
+    h += intervalHtml() + '<div class="fr-rows"><div class="fr-row"><span>Order</span><span>' + (s.shuffle ? "Shuffle" : "In order") +
       '</span></div><div class="fr-row"><span>Matte for new photos</span><span>' + esc(s.matte === "none" ? "None" : s.matte) +
       '</span></div><div class="fr-row"><span>Guest uploads</span><span>' + (state.guest_uploads ? "On during guest stays" : "Off") +
-      '</span></div></div><p class="fr-note">Change these, and which TVs Frame uses, in Settings → Apps → Frame.</p></aside>';
+      '</span></div></div><p class="fr-note">Change the others, and which TVs Frame uses, in Settings → Apps → Frame.</p></aside>';
     return h;
   }
 
@@ -151,7 +175,7 @@
           : '<span class="fr-dot warn"></span>Not set up';
       return '<div class="fr-tv"><div class="fr-tv-art"></div><div class="fr-tv-main"><div class="fr-tv-name">' + esc(t.name) +
         '</div><div class="fr-tv-sub">' + st + "</div></div></div>";
-    }).join("") + "</div></section></div>";
+    }).join("") + "</div>" + intervalHtml() + "</section></div>";
     return h;
   }
 
@@ -207,6 +231,7 @@
     if (!el) return;
     var d = el.dataset;
     if (d.tab) { tab = d.tab; selected = {}; render(); return; }
+    if (d.interval) { changeInterval(d.interval); return; }
     if (d.remove) {
       e.stopPropagation();
       if (state.role === "admin") { selected = {}; selected[d.remove] = true; render(); }

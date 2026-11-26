@@ -4,6 +4,7 @@
 can swap in a fake with :func:`set_factory`.
 """
 import logging
+import socket
 import threading
 
 import requests
@@ -15,6 +16,10 @@ CLIENT_NAME = "BDH Frame"
 MY_PHOTOS = "MY-C0002"
 TIMEOUT = 15
 PAIR_TIMEOUT = 45
+#: Longest one request to a TV may take. samsungtvws waits for its reply with no overall
+#: limit, so a TV that drops a reply (seen mid-upload) would otherwise hang the worker for good.
+CALL_DEADLINE = 60
+UPLOAD_DEADLINE = 180
 
 
 class TVError(Exception):
@@ -27,6 +32,18 @@ class Offline(TVError):
 
 class NotPaired(TVError):
     """The TV refused us: someone needs to pair (press Allow on the TV)."""
+
+
+class Standby(TVError):
+    """The TV answers but its screen is off; it only asks to allow Frame when it's on."""
+
+
+class PairDenied(NotPaired):
+    """Someone pressed Deny, or the TV is set to block new devices."""
+
+
+class PairTimeout(NotPaired):
+    """Nobody pressed Allow in time (or the TV never asked)."""
 
 
 def info(host, timeout=4):
@@ -58,6 +75,17 @@ class FrameClient:
         self.host = host
         self.token = token
         self._art = None
+        self._expired = False
+
+    def _abort(self):
+        """The call ran past its deadline: shut the socket so the blocked read fails."""
+        self._expired = True
+        sock = getattr(getattr(self._art, "connection", None), "sock", None)
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def _conn(self):
         if self._art is None:
@@ -68,17 +96,25 @@ class FrameClient:
             self._art = tv.art()
         return self._art
 
-    def _call(self, fn, *args, **kw):
+    def _call(self, fn, *args, deadline=None, **kw):
+        self._expired = False
+        timer = threading.Timer(deadline or CALL_DEADLINE, self._abort)
+        timer.daemon = True
+        timer.start()
         try:
             return fn(self._conn(), *args, **kw)
         except TVError:
             raise
         except Exception as exc:  # noqa: BLE001 - websocket, socket and protocol errors
             self.close()
+            if self._expired:
+                raise TVError("The TV stopped answering") from exc
             text = str(exc)
             if "unauthorized" in text.lower() or "ms.channel.unauthorized" in text:
                 raise NotPaired(text) from exc
             raise TVError(text or type(exc).__name__) from exc
+        finally:
+            timer.cancel()
 
     def my_photos(self):
         """Content ids in the TV's My Photos."""
@@ -86,7 +122,8 @@ class FrameClient:
         return {i["content_id"] for i in items or () if i.get("content_id")}
 
     def upload(self, data, matte="none"):
-        return self._call(lambda a: a.upload(data, file_type="JPEG", matte=matte, portrait_matte=matte))
+        return self._call(lambda a: a.upload(data, file_type="JPEG", matte=matte, portrait_matte=matte),
+                          deadline=UPLOAD_DEADLINE)
 
     def delete(self, content_ids):
         ids = list(content_ids)
@@ -105,6 +142,16 @@ class FrameClient:
     def set_slideshow(self, minutes, shuffle):
         self._call(lambda a: a.set_slideshow_status(duration=minutes, type=shuffle, category_id=MY_PHOTOS))
 
+    def slideshow(self):
+        """The TV's slideshow as ``"off"`` or ``"<minutes>:<shuffle 0|1>"`` (``""`` if it isn't over My Photos)."""
+        s = self._call(lambda a: a.get_slideshow_status()) or {}
+        value = str(s.get("value") or "off").lower()
+        if value == "off":
+            return "off"
+        if s.get("category_id") != MY_PHOTOS:
+            return ""
+        return f"{value}:{1 if s.get('type') == 'shuffleslideshow' else 0}"
+
     def close(self):
         art, self._art = self._art, None
         if art is not None:
@@ -117,26 +164,42 @@ class FrameClient:
 def pair(host):
     """Ask the TV to let Frame in; returns the token once someone presses Allow.
 
-    Blocks until then (or :data:`PAIR_TIMEOUT`). Raises :class:`NotPaired` if
-    they press Deny or nobody answers.
+    Blocks until then (or :data:`PAIR_TIMEOUT`). Raises :class:`Offline` or
+    :class:`Standby` if the TV can't ask, :class:`PairDenied` if they press
+    Deny, :class:`PairTimeout` if nobody answers.
     """
     from samsungtvws import SamsungTVWS
 
+    if not describe(host)["on"]:
+        raise Standby("The TV's screen is off")
     tv = SamsungTVWS(host, port=8002, name=CLIENT_NAME, timeout=PAIR_TIMEOUT)
     try:
         tv.open()
         if not tv.token:
-            raise NotPaired("The TV didn't give Frame a token")
+            raise PairDenied("The TV didn't give Frame a token")
         return tv.token
     except TVError:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise NotPaired(str(exc) or "Nobody allowed Frame on the TV") from exc
+        raise pair_error(exc) from exc
     finally:
         try:
             tv.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+def pair_error(exc):
+    """What a failed :func:`pair` means, from samsungtvws/websocket's exception."""
+    name = type(exc).__name__
+    text = str(exc)
+    if name == "UnauthorizedError" or "unauthorized" in text.lower():
+        return PairDenied(text or "The TV said no")
+    if "timeout" in name.lower() or "timed out" in text.lower():
+        return PairTimeout(text or "Nobody pressed Allow")
+    if isinstance(exc, OSError):
+        return Offline(text or name)
+    return NotPaired(text or name)
 
 
 _factory = FrameClient

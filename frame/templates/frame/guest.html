@@ -13,6 +13,7 @@
      data-state-url="{% url 'frame_guest_state' secret %}"
      data-upload-url="{% url 'frame_guest_upload' secret %}"
      data-photo-url="{% url 'frame_guest_photo' secret 'PHOTO' %}"
+     data-interval-url="{% url 'frame_guest_interval' secret %}"
      data-family="{{ family|yesno:'1,' }}"
      data-csrf="{{ csrf_token }}">
   <header class="fr-brand"><span class="fr-diamond"></span><span>{{ hub_brand.name|default:"Black Diamond Lodge" }}</span></header>

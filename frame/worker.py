@@ -25,6 +25,19 @@ _wake = threading.Event()
 _started = False
 _start_lock = threading.Lock()
 _last_discover = None
+_discovering = False
+
+
+def discovering():
+    """True from an admin pressing "Look for TVs now" until the search is done."""
+    return _discovering
+
+
+def discover_now():
+    global _last_discover, _discovering
+    _discovering = True
+    _last_discover = None
+    poke()
 
 
 def _is_runtime(path):
@@ -49,7 +62,7 @@ def should_start(argv=None):
 
 
 def _discover_if_due():
-    global _last_discover
+    global _last_discover, _discovering
     now = time.monotonic()
     if _last_discover is not None and now - _last_discover < DISCOVER_EVERY:
         return
@@ -58,6 +71,8 @@ def _discover_if_due():
         discovery.discover()
     except Exception:  # noqa: BLE001
         log.exception("Looking for Frame TVs failed")
+    finally:
+        _discovering = False
 
 
 def tick():

@@ -40,7 +40,21 @@
       h += '<div class="fr-privacy"><i class="fas fa-lock"></i> All photos are <b>permanently deleted</b> after checkout' +
         (s.checkout ? " on " + esc(F.day(s.checkout)) : "") + ". Nobody outside your group sees them.</div>";
     }
+    if (state.intervals) {
+      h += '<div class="fr-label">Change photo every</div><div class="fr-chips">' + state.intervals.map(function (c) {
+        return '<button class="fr-chip' + (c[0] === state.interval ? " on" : "") + '" data-interval="' + esc(c[0]) + '">' + esc(c[1]) + "</button>";
+      }).join("") + "</div>";
+    }
     view.innerHTML = h;
+  }
+
+  function changeInterval(v) {
+    if (v === state.interval) return;
+    var was = state.interval;
+    state.interval = v;
+    render();
+    F.api(root.dataset.intervalUrl, { interval: v }).then(function () { F.toast("Saved"); })
+      .catch(function (e) { state.interval = was; render(); F.toast(e.message, true); });
   }
 
   function openSheet(id) {
@@ -86,6 +100,7 @@
     if (!el) return;
     var d = el.dataset;
     if (d.target) { target = F.toggle(target, d.target); render(); return; }
+    if (d.interval) { changeInterval(d.interval); return; }
     if (d.photo) { e.stopPropagation(); openSheet(d.photo); return; }
     if (d.sheetTv && sheet) {
       sheet.tvs = F.toggle(sheet.tvs, d.sheetTv);
