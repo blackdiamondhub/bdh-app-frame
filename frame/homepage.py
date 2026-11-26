@@ -1,15 +1,11 @@
-from bdh_sdk.plugins import INFO, WARN, Status
+from bdh_sdk.plugins import INFO, Status
 
-from .models import TV, Photo
+from .models import Photo
 from . import service
 
 
 def status():
-    tvs = list(TV.objects.all())
-    if not tvs:
-        return Status("No TVs added", WARN)
-    if any(not t.token for t in tvs):
-        return Status("A TV needs pairing", WARN)
+    # TV setup (adding, pairing) lives on the admin TVs page, never on the tile guests see.
     stay = service.active_stay()
     if stay is not None:
         n = Photo.objects.filter(stay=stay).count()

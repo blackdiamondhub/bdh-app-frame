@@ -745,6 +745,15 @@ class DeadlineTests(SimpleTestCase):
         self.assertFalse(gone.is_set())
 
 
+class TileTests(Base):
+    def test_tile_never_talks_about_tv_setup(self):
+        from frame.homepage import status
+        self.assertEqual(status().text, "0 photos")  # no TVs yet
+        TV.objects.create(name="Office television", host="192.168.10.124", uid="uuid-o")  # unpaired
+        self.assertNotIn("pair", status().text.lower())
+        self.assertEqual(status().text, "0 photos")
+
+
 class PluginTests(SimpleTestCase):
     def test_plugin_importable(self):
         assert_plugin_importable("frame.plugin")
