@@ -305,6 +305,16 @@ class PrivacyTests(Base):
         self.assertTrue(Photo.objects.filter(id=self.fam.id).exists())
         self.assertNotIn("host", s["tvs"][0] if s["tvs"] else {})
 
+    def test_unpaired_tv_is_not_in_the_app(self):
+        living = self.tv()
+        office = TV.objects.create(name="Office television", host="192.168.10.124", uid="uuid-o")
+        self.assertEqual([t["id"] for t in self.state()["tvs"]], [living.id])
+        with self.assertRaises(service.Invalid):
+            service.add_photo(jpeg(), FAMILY, tv_ids=[office.id])
+        office.token = "tok"
+        office.save()
+        self.assertEqual(sorted(t["id"] for t in self.state()["tvs"]), [living.id, office.id])
+
     def test_nobody_sees_anything_without_a_stay(self):
         service.end_stay(self.gs)
         s = self.state()

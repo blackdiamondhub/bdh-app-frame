@@ -127,7 +127,7 @@ def _state(request, who):
     out = {
         "role": who.role,
         "guest_uploads": service.guest_uploads_on(),
-        "tvs": [_tv(t, who.role == ADMIN) for t in discovery.enabled_tvs()] if who.role else [],
+        "tvs": [_tv(t, who.role == ADMIN) for t in discovery.usable_tvs()] if who.role else [],
         "photos": [_photo(who, p, sent) for p in photos],
         "stay": None,
         "limit": service.GUEST_LIMIT if who.role == GUEST else service.FAMILY_LIMIT,
