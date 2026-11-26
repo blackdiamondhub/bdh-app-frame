@@ -186,8 +186,22 @@ def sync_tv(t, active=None, use=True):
     finally:
         client.close()
         _restart.discard(t.id)
+        if getattr(client, "new_token", None) and t.token:
+            log.info("%s gave Frame a new token; saved", t)
+            TV.objects.filter(id=t.id).update(token=client.new_token)
+            t.token = client.new_token
+    wanted = service.wanted_on(t, active) if use else []
     _synced[t.id] = (_fingerprint(t, wanted, use), time.monotonic())
     return ok
+
+
+def _keep_off(photo, t):
+    if photo.all_tvs:
+        photo.all_tvs = False
+        photo.save(update_fields=["all_tvs"])
+        photo.tvs.set(TV.objects.exclude(id=t.id))
+    else:
+        photo.tvs.remove(t)
 
 
 def _fingerprint(t, wanted, use):
@@ -204,7 +218,17 @@ def _sync(t, client, wanted, now, use=True):
 
     # 1. Take off everything that shouldn't be there (or vanished from the TV).
     gone = [pl for pl in placements if pl.photo_id is None or pl.photo_id not in wanted_ids]
-    missing = [pl for pl in placements if pl not in gone and pl.content_id not in on_tv]
+    live = [pl for pl in placements if pl not in gone]
+    missing = [pl for pl in live if pl.content_id not in on_tv]
+    # Someone deleted our photo on the TV: keep it off that TV rather than send it
+    # again. All of them gone at once is a reset TV, not a choice, so those go back.
+    if missing and not (len(missing) == len(live) > 1):
+        for pl in missing:
+            _keep_off(pl.photo, t)
+        dropped = {pl.photo_id for pl in missing}
+        wanted = [p for p in wanted if p.id not in dropped]
+        wanted_ids -= dropped
+        log.info("%s: %d photo(s) deleted on the TV; kept off it", t, len(missing))
     to_delete = [pl.content_id for pl in gone if pl.content_id in on_tv]
     deleted = {pl.content_id for pl in gone}
     if to_delete:
