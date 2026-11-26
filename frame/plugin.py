@@ -16,7 +16,7 @@ spec = PluginSpec(
     urls="frame.urls",
     status="frame.homepage.status",
     tiles=(
-        Tile("Frame", "frame_index", "frame/hub/icon.svg", section="lodge",
+        Tile("Frame TV", "frame_index", "frame/hub/icon.svg", section="lodge",
              subtitle="Your photos on the Frame TVs", order=40),
     ),
     settings=(
