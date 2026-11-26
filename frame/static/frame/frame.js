@@ -113,13 +113,13 @@
       state.intervals.map(function (c) {
         return '<button class="fr-chip' + (c[0] === state.interval ? " on" : "") + '" data-interval="' + esc(c[0]) + '">' +
           esc(c[1]) + "</button>";
-      }).join("") + "</div>" + '<button class="fr-btn fr-restart" data-restart><i class="fas fa-play"></i> Start slideshow</button>' +
-      '<p class="fr-note">TV stuck on the Art Mode menu, or not changing photo? Start slideshow puts it back on your photos.</p></div>';
+      }).join("") + "</div></div>";
   }
 
-  function restart() {
-    F.api(root.dataset.restartUrl, {})
-      .then(function () { F.toast("Starting the slideshow on the TVs in Art Mode"); })
+  function restart(id) {
+    var t = state.tvs.filter(function (x) { return String(x.id) === id; })[0];
+    F.api(root.dataset.restartUrl, { tv: Number(id) })
+      .then(function () { F.toast("Starting the slideshow" + (t ? " on " + t.name : "")); })
       .catch(function (e) { F.toast(e.message, true); });
   }
 
@@ -146,7 +146,7 @@
         '</div><div class="fr-tv-sub">' + tvStatus(t) + " · " + esc(t.host) + "</div>" +
         (t.unmanaged ? '<div class="fr-tv-sub">' + t.unmanaged + " other photo" + (t.unmanaged === 1 ? "" : "s") +
           " in My Photos (not from Frame; left alone, and guests can see them)</div>" : "") +
-        "</div></div>";
+        "</div>" + F.play(t) + "</div>";
     });
     if (root.dataset.tvsUrl) h += '<a class="fr-btn fr-pairlink" target="_top" href="/apps/frame' + esc(root.dataset.tvsUrl) +
       '"><i class="fas fa-link"></i> Pair a TV</a>';
@@ -181,7 +181,7 @@
         : t.paired ? '<span class="fr-dot ok"></span>Art Mode' + (state.photos.length ? " · showing your photos" : "")
           : '<span class="fr-dot warn"></span>Not set up';
       return '<div class="fr-tv"><div class="fr-tv-art"></div><div class="fr-tv-main"><div class="fr-tv-name">' + esc(t.name) +
-        '</div><div class="fr-tv-sub">' + st + "</div></div></div>";
+        '</div><div class="fr-tv-sub">' + st + "</div></div>" + F.play(t) + "</div>";
     }).join("") + "</div>" + intervalHtml() + "</section></div>";
     return h;
   }
@@ -239,7 +239,7 @@
     var d = el.dataset;
     if (d.tab) { tab = d.tab; selected = {}; render(); return; }
     if (d.interval) { changeInterval(d.interval); return; }
-    if (d.restart !== undefined) { restart(); return; }
+    if (d.restart) { restart(d.restart); return; }
     if (d.remove) {
       e.stopPropagation();
       if (state.role === "admin") { selected = {}; selected[d.remove] = true; render(); }

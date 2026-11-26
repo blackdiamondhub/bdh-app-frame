@@ -264,18 +264,22 @@ def api_interval(request):
     return _set_interval(request, _who(request))
 
 
-def _restart(who):
-    """Anyone who can use the app may put the TVs back on their photos."""
+def _restart(who, request):
+    """Anyone who can use the app may put a TV back on its slideshow."""
     if who.role is None:
         return _error("Changing the TVs isn't open right now", 403)
-    sync.restart_slideshows()
+    tv = (_body(request) or {}).get("tv")
+    if tv is not None and (isinstance(tv, bool) or not isinstance(tv, int)):
+        return _error("Pick a TV", 400)
+    if not sync.restart_slideshows(tv):
+        return _error("That TV isn't set up yet", 404)
     worker.poke()
     return JsonResponse({"ok": True})
 
 
 @require_POST
 def api_restart(request):
-    return _restart(_who(request))
+    return _restart(_who(request), request)
 
 
 @require_POST
@@ -345,7 +349,7 @@ def guest_restart(request, secret):
     who = _who_link(secret)
     if who.role is None:
         return _error("This link has expired", 404)
-    return _restart(who)
+    return _restart(who, request)
 
 
 @require_POST
