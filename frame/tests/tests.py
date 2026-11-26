@@ -249,6 +249,47 @@ class SyncTests(Base):
         sync.sync_all()
         self.assertEqual(len(FakeTV.tvs["10.0.0.1"]["photos"]), 2)
 
+    def test_photo_deleted_on_the_tv_stays_off_that_tv(self):
+        """Deleting one of Frame's photos with the remote must not make Frame send it back."""
+        a, b = self.tv("10.0.0.1"), self.tv("10.0.0.2")
+        p, q = self.family(2)
+        sync.sync_all()
+        cid = Placement.objects.get(tv=a, photo=p).content_id
+        FakeTV.tvs[a.host]["photos"].remove(cid)  # deleted on the TV
+        sync.sync_all()
+        sync.sync_all()
+        self.assertNotIn(cid, FakeTV.tvs[a.host]["photos"])
+        self.assertEqual(len(FakeTV.tvs[a.host]["photos"]), 2)  # q + the TV's own photo
+        self.assertEqual(len(FakeTV.tvs[b.host]["photos"]), 3)  # still on the other TV
+        p.refresh_from_db()
+        self.assertFalse(p.all_tvs)
+        self.assertEqual(list(p.tvs.all()), [b])
+        service.set_targets(p, None)  # put back on every TV from the app
+        sync.sync_all()
+        self.assertEqual(len(FakeTV.tvs[a.host]["photos"]), 3)
+
+    def test_reset_tv_gets_everything_back(self):
+        t = self.tv()
+        self.family(3)
+        sync.sync_tv(t)
+        fake = FakeTV.tvs[t.host]
+        fake["photos"] = ["MY_F0001"]  # every Frame photo gone at once: a reset, not a choice
+        sync.sync_tv(t)
+        self.assertEqual(len(fake["photos"]), 4)
+        self.assertTrue(all(p.all_tvs for p in Photo.objects.all()))
+
+    def test_new_token_from_the_tv_is_saved(self):
+        """After Allow the TV can hand out a new token; using the old one makes it ask again."""
+        t = self.tv()
+        self.family(1)
+
+        class Rotating(FakeTV):
+            new_token = "tok-2"
+        tvlib.set_factory(Rotating)
+        sync.sync_tv(t)
+        t.refresh_from_db()
+        self.assertEqual(t.token, "tok-2")
+
     def test_deleted_photo_comes_off(self):
         t = self.tv()
         (p,) = self.family(1)
@@ -786,6 +827,25 @@ class TileTests(Base):
         TV.objects.create(name="Office television", host="192.168.10.124", uid="uuid-o")  # unpaired
         self.assertNotIn("pair", status().text.lower())
         self.assertEqual(status().text, "0 photos")
+
+
+class TokenTests(SimpleTestCase):
+    def test_client_notices_a_new_token(self):
+        class Art:
+            token = "tok"
+
+            def get_artmode(self):
+                self.token = "tok-new"  # what samsungtvws does on ms.channel.connect
+                return "on"
+
+        c = tvlib.FrameClient("10.0.0.1", "tok")
+        c._art = Art()
+        self.assertTrue(c.art_mode())
+        self.assertEqual(c.new_token, "tok-new")
+        c2 = tvlib.FrameClient("10.0.0.1", "tok")
+        c2._art = type("Same", (), {"token": "tok", "get_artmode": lambda self: "on"})()
+        c2.art_mode()
+        self.assertIsNone(c2.new_token)
 
 
 class PluginTests(SimpleTestCase):

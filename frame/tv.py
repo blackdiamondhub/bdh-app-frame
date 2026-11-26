@@ -74,6 +74,9 @@ class FrameClient:
     def __init__(self, host, token):
         self.host = host
         self.token = token
+        # Set when the TV hands out a new token (it can after someone presses Allow);
+        # the caller must save it or the TV asks again on the next connection.
+        self.new_token = None
         self._art = None
         self._expired = False
 
@@ -106,6 +109,7 @@ class FrameClient:
         except TVError:
             raise
         except Exception as exc:  # noqa: BLE001 - websocket, socket and protocol errors
+            self._grab_token()
             self.close()
             if self._expired:
                 raise TVError("The TV stopped answering") from exc
@@ -115,6 +119,12 @@ class FrameClient:
             raise TVError(text or type(exc).__name__) from exc
         finally:
             timer.cancel()
+            self._grab_token()
+
+    def _grab_token(self):
+        got = getattr(self._art, "token", None)
+        if got and got != (self.new_token or self.token):
+            self.new_token = got
 
     def my_photos(self):
         """Content ids in the TV's My Photos."""
