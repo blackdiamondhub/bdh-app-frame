@@ -11,7 +11,7 @@ from django import db
 from django.utils import timezone
 
 from . import discovery, images, service, tv as tvlib
-from .models import TV, Photo, Placement
+from .models import TV, Placement
 
 log = logging.getLogger(__name__)
 
@@ -205,9 +205,6 @@ def _keep_off(photo, t):
         photo.tvs.set(TV.objects.exclude(id=t.id))
     else:
         photo.tvs.remove(t)
-    if not photo.all_tvs and not photo.tvs.exists():
-        log.info("%s was deleted on its last TV; deleting it", photo)
-        service.delete_photos(Photo.objects.filter(id=photo.id))
 
 
 def _fingerprint(t, wanted, use):

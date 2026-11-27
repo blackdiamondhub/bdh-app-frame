@@ -272,22 +272,6 @@ class SyncTests(Base):
         sync.sync_all()
         self.assertEqual(len(FakeTV.tvs[a.host]["photos"]), 3)
 
-    def test_photo_deleted_on_every_tv_is_deleted(self):
-        """Once a photo has been deleted on each TV it was on, Frame deletes it too."""
-        a, b = self.tv("10.0.0.1"), self.tv("10.0.0.2")
-        p, q = self.family(2)
-        sync.sync_all()
-        FakeTV.tvs[a.host]["photos"].remove(Placement.objects.get(tv=a, photo=p).content_id)
-        sync.sync_all()
-        self.assertTrue(Photo.objects.filter(id=p.id).exists())
-        FakeTV.tvs[b.host]["photos"].remove(Placement.objects.get(tv=b, photo=p).content_id)
-        sync.sync_all()
-        sync.sync_all()
-        self.assertFalse(Photo.objects.filter(id=p.id).exists())
-        self.assertTrue(Photo.objects.filter(id=q.id).exists())
-        self.assertEqual(len(FakeTV.tvs[a.host]["photos"]), 2)
-        self.assertEqual(len(FakeTV.tvs[b.host]["photos"]), 2)
-
     def test_photos_sent_before_framing_are_sent_again(self):
         """Photos uploaded by older versions (maybe with a matte) are replaced by framed ones."""
         t = self.tv(photos=("MY_F0001", "MY_F0050"), current="MY_F0050")
@@ -964,3 +948,20 @@ class NoNativeDialogTests(SimpleTestCase):
             text = re.sub(r"/\*.*?\*/|//[^\n]*", "", path.read_text(encoding="utf-8"), flags=re.S)
             found += ["%s: %s()" % (path.name, m.group(1)) for m in pattern.finditer(text)]
         self.assertEqual(found, [])
+
+    def test_every_button_action_is_handled(self):
+        """A button whose data-act/data-* nothing reads does nothing when tapped."""
+        import re
+        static = pathlib.Path(__file__).resolve().parents[1] / "static" / "frame"
+        texts = {p.name: p.read_text(encoding="utf-8") for p in static.glob("*.js")}
+        alljs = "\n".join(texts.values())
+        missing = []
+        for name, text in texts.items():
+            for v in set(re.findall(r'data-act="([\w-]+)"', text)):
+                if not re.search(r'case "%s"|act === "%s"' % (v, v), text):
+                    missing.append("%s: data-act=%s" % (name, v))
+            for a in set(re.findall(r"data-([a-z][a-z-]*)[=\s>\"']", text)) - {"act"}:
+                camel = re.sub(r"-(\w)", lambda m: m.group(1).upper(), a)
+                if not re.search(r"\.%s\b|\[data-%s[\]=]|dataset\.%s\b" % (camel, a, camel), alljs):
+                    missing.append("%s: data-%s" % (name, a))
+        self.assertEqual(missing, [])

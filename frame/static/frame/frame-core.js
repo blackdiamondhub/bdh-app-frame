@@ -141,10 +141,23 @@
     return cur.length ? cur : "all";
   }
 
-  function modal(html) {
+  // The hub sizes its iframe to the whole page, so a card centred in the "viewport" can be
+  // off-screen: put it beside the element that opened it (``near``) instead.
+  function modal(html, near) {
     var m = document.getElementById("fr-modal");
-    document.getElementById("fr-modal-card").innerHTML = html;
+    var card = document.getElementById("fr-modal-card");
+    // Measure first: ``near`` may be inside the card that is about to be replaced.
+    var r = near && near.getBoundingClientRect ? near.getBoundingClientRect() : null;
+    card.innerHTML = html;
     m.hidden = false;
+    m.style.alignItems = "";
+    card.style.marginTop = "";
+    if (r && r.height) {
+      var top = r.top + r.height / 2 - card.offsetHeight / 2;
+      top = Math.max(8, Math.min(top, window.innerHeight - card.offsetHeight - 8));
+      m.style.alignItems = "start";
+      card.style.marginTop = Math.round(top) + "px";
+    }
     return m;
   }
 
