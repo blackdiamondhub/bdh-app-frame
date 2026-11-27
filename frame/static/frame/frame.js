@@ -263,8 +263,15 @@
       case "upload": fileInput.click(); break;
       case "clear": selected = {}; render(); break;
       case "delete-sel":
-        var ids2 = Object.keys(selected);
-        if (window.confirm("Delete " + ids2.length + " photo" + (ids2.length === 1 ? "" : "s") + "? They come off every TV.")) removePhotos(ids2);
+        var n = Object.keys(selected).length;
+        if (!n) break;
+        F.modal("<h3>Delete " + n + " photo" + (n === 1 ? "" : "s") + "?</h3><p>They come off every TV right away and are deleted from the hub.</p>" +
+          '<div class="fr-modal-actions"><button class="fr-btn" data-close>Keep</button>' +
+          '<button class="fr-btn danger solid" data-act="delete-sel-yes">Delete</button></div>');
+        break;
+      case "delete-sel-yes":
+        F.closeModal();
+        removePhotos(Object.keys(selected));
         break;
       case "family-qr":
         showQr(root.dataset.qrUrl + "?for=family&t=" + Date.now(), "Add from your phone",
@@ -274,7 +281,12 @@
         showQr(root.dataset.qrUrl + "?t=" + Date.now(), "Guests' QR code", "The link guests use to add photos during this stay.");
         break;
       case "end-stay":
-        if (!window.confirm("End this guest stay now? Its photos are deleted for good and your photos go back on the TVs.")) return;
+        F.modal("<h3>End this guest stay now?</h3><p>Its photos are deleted for good and your photos go back on the TVs.</p>" +
+          '<div class="fr-modal-actions"><button class="fr-btn" data-close>Keep it going</button>' +
+          '<button class="fr-btn danger solid" data-act="end-stay-yes">End stay</button></div>');
+        break;
+      case "end-stay-yes":
+        F.closeModal();
         F.api(root.dataset.stayUrl, { op: "end" }).then(function () { F.toast("Guest stay ended"); load(); })
           .catch(function (err) { F.toast(err.message, true); });
         break;
