@@ -935,3 +935,16 @@ class PluginTests(SimpleTestCase):
     def test_templates_escape_and_never_inline_family_photos(self):
         js = (ROOT / "static" / "frame" / "guest.js").read_text()
         self.assertNotIn("family\"", js.replace("family ", ""))  # phone page gets photos only from the API
+
+class NoNativeDialogTests(SimpleTestCase):
+    # The hub shows the app in a sandboxed iframe without allow-modals, so
+    # confirm()/alert()/prompt() are silently ignored there (bulk delete did nothing).
+    def test_static_js_has_no_native_dialogs(self):
+        import re
+        pattern = re.compile(r"(?<![\w.$])(?:(?:window|self|top|parent)\.)?(confirm|alert|prompt)\s*\(")
+        static = pathlib.Path(__file__).resolve().parents[1] / "static" / "frame"
+        found = []
+        for path in static.glob("*.js"):
+            text = re.sub(r"/\*.*?\*/|//[^\n]*", "", path.read_text(encoding="utf-8"), flags=re.S)
+            found += ["%s: %s()" % (path.name, m.group(1)) for m in pattern.finditer(text)]
+        self.assertEqual(found, [])
