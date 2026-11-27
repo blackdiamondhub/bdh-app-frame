@@ -653,6 +653,20 @@ class ImageTests(SimpleTestCase):
         with self.assertRaises(images.BadImage):
             images.prepare(b"not a photo")
 
+    def test_heic_from_an_iphone(self):
+        """The upload pages accept HEIC (so iOS doesn't convert first): the hub must read it."""
+        out = io.BytesIO()
+        Image.new("RGB", (4032, 3024), (30, 120, 200)).save(out, "HEIF")
+        big, thumb, w, h = images.prepare(out.getvalue())
+        self.assertEqual((w, h), (2880, 2160))
+        self.assertEqual(Image.open(io.BytesIO(big)).format, "JPEG")
+        self.assertEqual(Image.open(io.BytesIO(images.for_tv(big))).size, images.TV_SIZE)
+
+    def test_upload_pages_accept_heic(self):
+        for name in ("index.html", "guest.html"):
+            html = (ROOT / "templates" / "frame" / name).read_text()
+            self.assertIn('accept="image/*,image/heic,image/heif,.heic,.heif"', html, name)
+
     def test_for_tv_frames_portrait_with_blurred_sides(self):
         out = images.for_tv(jpeg(1080, 1440, color=(200, 100, 50)))
         img = Image.open(io.BytesIO(out))

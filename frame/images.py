@@ -2,6 +2,11 @@
 import io
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageError
+from pillow_heif import register_heif_opener
+
+# iPhones shoot HEIC. Reading it ourselves (the upload pages list HEIC) stops iOS
+# converting every photo to JPEG before its picker closes, which is slow.
+register_heif_opener()
 
 #: The Frame's panel.
 TV_SIZE = (3840, 2160)
@@ -68,7 +73,7 @@ def prepare(data):
     except BadImage:
         raise
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
-        raise BadImage("That isn't a photo Frame can read (use JPEG or PNG)") from exc
+        raise BadImage("That isn't a photo Frame can read (use JPEG, PNG or HEIC)") from exc
     big = _fit(img, TV_SIZE)
     out = io.BytesIO()
     big.save(out, "JPEG", quality=90, optimize=True)
