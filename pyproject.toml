@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bdh-app-frame"
-version = "1.0.0b15"
+version = "1.0.0b16"
 description = "Black Diamond Hub app: family and guest photos on Samsung Frame TVs"
 readme = "README.md"
 license = { text = "MIT" }

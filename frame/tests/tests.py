@@ -452,6 +452,9 @@ class PrivacyTests(Base):
         self.assertEqual([p["id"] for p in s["photos"]], [self.guest_photo.id])
         self.assertEqual(self.c.get(reverse("frame_thumb", args=[self.fam.id])).status_code, 404)
         self.assertEqual(self.c.get(reverse("frame_thumb", args=[self.guest_photo.id])).status_code, 200)
+        self.assertEqual(self.c.get(reverse("frame_image", args=[self.fam.id])).status_code, 404)
+        r = self.c.get(s["photos"][0]["image"])
+        self.assertEqual((r.status_code, r["Content-Type"]), (200, "image/jpeg"))
         r = self.c.post(reverse("frame_photo", args=[self.fam.id]), json.dumps({"op": "delete"}),
                         content_type="application/json")
         self.assertEqual(r.status_code, 404)
@@ -492,6 +495,7 @@ class PrivacyTests(Base):
         self.assertIsNone(s["role"])
         self.assertEqual(s["photos"], [])
         self.assertEqual(self.c.get(reverse("frame_thumb", args=[self.fam.id])).status_code, 404)
+        self.assertEqual(self.c.get(reverse("frame_image", args=[self.fam.id])).status_code, 404)
         r = self.c.post(reverse("frame_upload"), {"photo": io.BytesIO(jpeg())})
         self.assertEqual(r.status_code, 403)
 
@@ -501,6 +505,7 @@ class PrivacyTests(Base):
         self.assertEqual([p["id"] for p in s["photos"]], [self.guest_photo.id])
         self.assertNotIn("link", s["stay"])
         self.assertEqual(self.c.get(reverse("frame_guest_thumb", args=[self.gs.link_secret, self.fam.id])).status_code, 404)
+        self.assertEqual(self.c.get(reverse("frame_guest_image", args=[self.gs.link_secret, self.fam.id])).status_code, 404)
         f = io.BytesIO(jpeg())
         f.name = "x.jpg"
         r = self.c.post(reverse("frame_guest_upload", args=[self.gs.link_secret]), {"photo": f, "tvs": "all"})

@@ -143,12 +143,13 @@
 
   // The hub sizes its iframe to the whole page, so a card centred in the "viewport" can be
   // off-screen: put it beside the element that opened it (``near``) instead.
-  function modal(html, near) {
+  function modal(html, near, cls) {
     var m = document.getElementById("fr-modal");
     var card = document.getElementById("fr-modal-card");
     // Measure first: ``near`` may be inside the card that is about to be replaced.
     var r = near && near.getBoundingClientRect ? near.getBoundingClientRect() : null;
     card.innerHTML = html;
+    m.classList.toggle("fr-view", cls === "fr-view");
     m.hidden = false;
     m.style.alignItems = "";
     card.style.marginTop = "";
@@ -161,6 +162,19 @@
     return m;
   }
 
+  // A bigger look at one photo, letterboxed into 16:9 the way the TV shows it. The thumbnail
+  // shows at once and the full photo, stacked on top, fades in when it has loaded.
+  function viewer(p, near) {
+    // Inside the hub's iframe innerHeight is the whole page, so cap by the screen too.
+    var h = Math.min(window.innerHeight, screen.availHeight || window.innerHeight) * 0.72;
+    modal('<div class="fr-view-box" style="width:min(100%,' + Math.round(h * 16 / 9) + 'px)"><img alt="" src="' +
+      esc(p.thumb) + '"><img alt="" class="fr-view-big" src="' + esc(p.image) +
+      '"></div><div class="fr-modal-actions"><button class="fr-btn" data-close>Done</button></div>', near, "fr-view");
+    var big = document.querySelector("#fr-modal-card .fr-view-big");
+    if (big.complete && big.naturalWidth) big.classList.add("on");
+    else big.addEventListener("load", function () { big.classList.add("on"); });
+  }
+
   function closeModal() { document.getElementById("fr-modal").hidden = true; }
 
   document.addEventListener("click", function (e) {
@@ -171,6 +185,6 @@
   window.Frame = {
     root: root, esc: esc, toast: toast, api: api, photoUrl: photoUrl, uploadAll: uploadAll,
     tvNames: tvNames, play: play, sending: sending, day: day, chips: chips, toggle: toggle,
-    modal: modal, closeModal: closeModal,
+    modal: modal, closeModal: closeModal, viewer: viewer,
   };
 })();

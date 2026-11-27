@@ -16,6 +16,7 @@ urlpatterns = [
     path("api/tvs/<int:tv_id>/pair/", views.api_tv_pair, name="frame_tv_pair"),
     path("qr.svg", views.qr, name="frame_qr"),
     path("thumb/<str:photo_id>.jpg", views.thumb, name="frame_thumb"),
+    path("image/<str:photo_id>.jpg", views.image, name="frame_image"),
     path("g/<str:secret>/", views.guest, name="frame_guest"),
     path("g/<str:secret>/api/state/", views.guest_state, name="frame_guest_state"),
     path("g/<str:secret>/api/upload/", views.guest_upload, name="frame_guest_upload"),
@@ -23,4 +24,5 @@ urlpatterns = [
     path("g/<str:secret>/api/restart/", views.guest_restart, name="frame_guest_restart"),
     path("g/<str:secret>/api/photos/<str:photo_id>/", views.guest_photo, name="frame_guest_photo"),
     path("g/<str:secret>/thumb/<str:photo_id>.jpg", views.guest_thumb, name="frame_guest_thumb"),
+    path("g/<str:secret>/image/<str:photo_id>.jpg", views.guest_image, name="frame_guest_image"),
 ]

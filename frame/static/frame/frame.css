@@ -110,6 +110,14 @@
 .fr-sheet { place-items: end center; }
 .fr-sheet .fr-modal-card { width: 100%; max-width: 32rem; border-radius: 1.2rem 1.2rem 0 0;
                            padding-bottom: calc(1.4rem + env(safe-area-inset-bottom)); }
+.fr-modal.fr-view { place-items: center; }
+.fr-modal.fr-view .fr-modal-card { width: min(64rem, 96vw); max-width: none; max-height: none; border-radius: 1rem; padding: .8rem; }
+.fr-view-box { position: relative; aspect-ratio: 16 / 9; margin: 0 auto; background: #000; border-radius: .5rem; overflow: hidden; }
+.fr-view-box img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.fr-view-box .fr-view-big { opacity: 0; transition: opacity .25s; }
+.fr-view-box .fr-view-big.on { opacity: 1; }
+.fr-view .fr-modal-actions { margin-top: .7rem; }
+.fr-zoom { cursor: zoom-in; }
 .fr-label { text-transform: uppercase; letter-spacing: .1em; font-size: .75rem; color: var(--fr-dim); margin: 1rem 0 .5rem; }
 
 .fr-toast { position: fixed; left: 50%; bottom: 2rem; transform: translateX(-50%); background: #24324d; color: #fff;
