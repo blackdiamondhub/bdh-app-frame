@@ -152,7 +152,6 @@
       '"><i class="fas fa-link"></i> Pair a TV</a>';
     var s = state.settings || {};
     h += intervalHtml() + '<div class="fr-rows"><div class="fr-row"><span>Order</span><span>' + (s.shuffle ? "Shuffle" : "In order") +
-      '</span></div><div class="fr-row"><span>Matte for new photos</span><span>' + esc(s.matte === "none" ? "None" : s.matte) +
       '</span></div><div class="fr-row"><span>Guest uploads</span><span>' + (state.guest_uploads ? "On during guest stays" : "Off") +
       '</span></div></div><p class="fr-note">Change the others, and which TVs Frame uses, in Settings → Apps → Frame.</p></aside>';
     return h;

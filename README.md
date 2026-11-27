@@ -28,8 +28,11 @@ time; accept it with the remote. The TV must be on and reachable from the hub (p
 | --- | --- | --- |
 | `interval` | choice | Minutes per photo in the slideshow |
 | `shuffle` | bool | Shuffle the slideshow |
-| `matte` | choice | Matte around each photo |
 | `guest_uploads` | bool | Let guests add photos |
+
+Photos are sent to the TVs as 3840×2160 with the whole photo in the middle and a blurred copy
+filling the sides, never with a TV matte: Frame TVs crop non-16:9 photos, and their art app
+crashes (error 40000) on a matted non-16:9 photo.
 
 ## Network
 

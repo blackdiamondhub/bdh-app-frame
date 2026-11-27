@@ -131,8 +131,9 @@ class FrameClient:
         items = self._call(lambda a: a.available(MY_PHOTOS))
         return {i["content_id"] for i in items or () if i.get("content_id")}
 
-    def upload(self, data, matte="none"):
-        return self._call(lambda a: a.upload(data, file_type="JPEG", matte=matte, portrait_matte=matte),
+    def upload(self, data):
+        # Never a matte: the art app crashes (error 40000) on a matted non-16:9 photo.
+        return self._call(lambda a: a.upload(data, file_type="JPEG", matte="none", portrait_matte="none"),
                           deadline=UPLOAD_DEADLINE)
 
     def delete(self, content_ids):

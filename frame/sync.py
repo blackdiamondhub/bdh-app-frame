@@ -10,7 +10,7 @@ import time
 from django import db
 from django.utils import timezone
 
-from . import discovery, service, tv as tvlib
+from . import discovery, images, service, tv as tvlib
 from .models import TV, Placement
 
 log = logging.getLogger(__name__)
@@ -210,8 +210,7 @@ def _keep_off(photo, t):
 def _fingerprint(t, wanted, use):
     """What Frame wants on ``t``; when it is unchanged the TV needs no visit."""
     return (use, tuple(p.id for p in wanted), service.slideshow_value(bool(wanted)),
-            service.setting("matte", "none"),
-            tuple(Placement.objects.filter(tv=t).order_by("id").values_list("id", "photo_id")))
+            tuple(Placement.objects.filter(tv=t).order_by("id").values_list("id", "photo_id", "framed")))
 
 
 def _sync(t, client, wanted, now, use=True):
@@ -232,6 +231,12 @@ def _sync(t, client, wanted, now, use=True):
         wanted = [p for p in wanted if p.id not in dropped]
         wanted_ids -= dropped
         log.info("%s: %d photo(s) deleted on the TV; kept off it", t, len(missing))
+    # Sent before photos were framed for the TV (maybe with a matte, which crashes
+    # the TV's art app): take them off and send them again.
+    old = [pl for pl in live if not pl.framed and pl not in missing and pl.photo_id in wanted_ids]
+    if old:
+        log.info("%s: re-sending %d photo(s) framed", t, len(old))
+        gone += old
     to_delete = [pl.content_id for pl in gone if pl.content_id in on_tv]
     deleted = {pl.content_id for pl in gone}
     if to_delete:
@@ -241,15 +246,14 @@ def _sync(t, client, wanted, now, use=True):
 
     # 2. Upload what's wanted but not there.
     placed = {pl.photo_id: pl.content_id for pl in placements if pl not in gone and pl not in missing}
-    matte = service.setting("matte", "none") or "none"
     uploaded = []
     for p in wanted:
         if p.id in placed:
             continue
-        cid = client.upload(service.read_image(p), matte=matte)
+        cid = client.upload(images.for_tv(service.read_image(p)))
         if not cid:
             raise tvlib.TVError("The TV didn't accept a photo")
-        Placement.objects.create(photo=p, tv=t, content_id=cid)
+        Placement.objects.create(photo=p, tv=t, content_id=cid, framed=True)
         placed[p.id] = cid
         on_tv.add(cid)
         uploaded.append(p)
