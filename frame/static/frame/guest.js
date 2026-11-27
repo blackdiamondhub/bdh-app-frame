@@ -48,7 +48,8 @@
     if (state.tvs.length) {
       h += '<div class="fr-label">TVs</div>' + state.tvs.map(function (t) {
         return '<div class="fr-tv"><div class="fr-tv-main"><div class="fr-tv-name">' + esc(t.name) + '</div><div class="fr-tv-sub">' +
-          (t.online ? '<span class="fr-dot ok"></span>On' : '<span class="fr-dot"></span>Off') + "</div></div>" + F.play(t) + "</div>";
+          (!t.online ? '<span class="fr-dot"></span>Off' : t.uploading ? '<span class="fr-dot ok"></span>' + F.upload(t)
+            : '<span class="fr-dot ok"></span>On') + "</div></div>" + F.play(t) + "</div>";
       }).join("");
     }
     view.innerHTML = h;

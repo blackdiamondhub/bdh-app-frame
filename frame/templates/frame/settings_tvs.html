@@ -103,6 +103,7 @@
         if (t.pair && t.pair.state === 'waiting') return ['ft-warn', 'Waiting for someone to press Allow on the TV'];
         if (!t.paired) return ['ft-warn', 'Not paired'];
         if (!t.online) return ['', 'Off · photos go up when it\u2019s on'];
+        if (t.uploading) return ['ft-ok', 'Sending photos (' + t.uploading.done + ' of ' + t.uploading.total + ')\u2026'];
         if (t.error) return ['ft-bad', t.error];
         return ['ft-ok', 'Paired · on'];
     }

@@ -63,6 +63,7 @@
       ? '<span class="fr-dot warn"></span>Press <b>Allow</b> on the TV'
       : '<span class="fr-dot warn"></span>Not paired yet · Frame asks again when it\'s on';
     if (!t.online) return '<span class="fr-dot"></span>Off · photos go up when it\'s on';
+    if (t.uploading) return '<span class="fr-dot ok"></span>' + F.upload(t);
     if (t.error) return '<span class="fr-dot bad"></span>' + esc(t.error);
     return '<span class="fr-dot ok"></span>On';
   }
@@ -180,6 +181,7 @@
     h += tiles ? '<div class="fr-grid">' + tiles + "</div>" : '<div class="fr-empty">No photos yet. Scan the code to add some from your phone.</div>';
     h += '<div class="fr-tvcards">' + state.tvs.map(function (t) {
       var st = !t.online ? '<span class="fr-dot"></span>Off · photos go up when it\'s on'
+        : t.uploading ? '<span class="fr-dot ok"></span>' + F.upload(t)
         : t.paired ? '<span class="fr-dot ok"></span>Art Mode' + (state.photos.length ? " · showing your photos" : "")
           : '<span class="fr-dot warn"></span>Not set up';
       return '<div class="fr-tv"><div class="fr-tv-art"></div><div class="fr-tv-main"><div class="fr-tv-name">' + esc(t.name) +

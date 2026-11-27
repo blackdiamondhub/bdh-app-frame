@@ -55,6 +55,8 @@ class FakeTV:
         img = Image.open(io.BytesIO(data))
         assert img.size == images.TV_SIZE, f"sent {img.size}, not the panel's 16:9"
         img.verify()
+        if self.tv.get("on_upload"):
+            self.tv["on_upload"]()
         self.tv["n"] += 1
         cid = f"MY_F{self.tv['n']:04d}"
         self.tv["photos"].append(cid)
@@ -127,6 +129,7 @@ class Base(TestCase):
         sync._pair_status.clear()
         sync._synced.clear()
         sync._restart.clear()
+        sync._uploading.clear()
         p_re = patch("frame.sync.RECHECK", 0)  # every sync visits the TV unless a test says otherwise
         p_re.start()
         self.addCleanup(p_re.stop)
@@ -196,6 +199,43 @@ class StayTests(Base):
 
 
 class SyncTests(Base):
+    def test_tv_shows_on_with_progress_while_photos_go_up(self):
+        # A first sync uploads for minutes; the TV mustn't look off meanwhile.
+        t = self.tv()
+        self.family(3)
+        seen = []
+
+        def during():
+            row = TV.objects.get(id=t.id)
+            seen.append((row.online, sync.uploading(t.id), views._tv_row(row, set())["uploading"]))
+
+        FakeTV.tvs[t.host]["on_upload"] = during
+        self.assertTrue(sync.sync_tv(t))
+        self.assertEqual([s[0] for s in seen], [True] * 3)
+        self.assertEqual([s[1] for s in seen], [{"done": i, "total": 3} for i in range(3)])
+        self.assertEqual([s[2] for s in seen], [s[1] for s in seen])
+        self.assertIsNone(sync.uploading(t.id))
+
+    def test_failed_upload_clears_progress(self):
+        t = self.tv()
+        self.family(2)
+
+        def boom():
+            raise tvlib.TVError("The TV stopped answering")
+
+        FakeTV.tvs[t.host]["on_upload"] = boom
+        self.assertFalse(sync.sync_tv(t))
+        self.assertIsNone(sync.uploading(t.id))
+        t.refresh_from_db()
+        self.assertEqual((t.online, t.error), (True, "The TV stopped answering"))
+
+    def test_photo_deleted_mid_sync_is_skipped(self):
+        t = self.tv()
+        gone, kept = self.family(2)
+        service.storage().delete(gone.image_name)
+        self.assertTrue(sync.sync_tv(t))
+        self.assertEqual(list(Placement.objects.values_list("photo_id", flat=True)), [kept.id])
+
     def test_family_photos_go_up_and_never_touch_unmanaged(self):
         t = self.tv()
         self.family(2)

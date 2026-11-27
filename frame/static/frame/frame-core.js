@@ -100,6 +100,12 @@
       ' aria-label="Start the slideshow on ' + esc(t.name) + '"><i class="fas fa-play"></i></button>';
   }
 
+  // "Sending photos (3 of 45)…" while Frame uploads to the TV, else "".
+  function upload(t) {
+    var u = t.uploading;
+    return u ? "Sending photos (" + u.done + " of " + u.total + ")\u2026" : "";
+  }
+
   function tvNames(photo, tvs) {
     if (photo.all_tvs) return ["All TVs"];
     var byId = {};
@@ -184,7 +190,7 @@
 
   window.Frame = {
     root: root, esc: esc, toast: toast, api: api, photoUrl: photoUrl, uploadAll: uploadAll,
-    tvNames: tvNames, play: play, sending: sending, day: day, chips: chips, toggle: toggle,
+    tvNames: tvNames, play: play, upload: upload, sending: sending, day: day, chips: chips, toggle: toggle,
     modal: modal, closeModal: closeModal, viewer: viewer,
   };
 })();

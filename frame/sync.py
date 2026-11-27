@@ -28,6 +28,13 @@ _pair_status = {}  # tv id -> {"state", "message", "at"}
 _pair_lock = threading.Lock()
 _synced = {}  # tv id -> (fingerprint, time.monotonic()) of the last good sync
 _restart = set()  # tv ids to put back on a photo with the slideshow running
+_uploading = {}  # tv id -> [sent, total] while photos are going up
+
+
+def uploading(tv_id):
+    """``{"done", "total"}`` while Frame is sending photos to the TV, else None."""
+    up = _uploading.get(tv_id)
+    return {"done": up[0], "total": up[1]} if up else None
 
 
 def restart_slideshows(tv_id=None):
@@ -173,6 +180,9 @@ def sync_tv(t, active=None, use=True):
     if last and last[0] == fp and time.monotonic() - last[1] < RECHECK and not t.error and t.id not in _restart:
         _mark(t, online=True, last_seen=now)
         return True
+    # On as soon as it answers: a first sync can spend minutes uploading.
+    if not t.online:
+        _mark(t, online=True, last_seen=now)
     client = tvlib.client(t.host, t.token)
     try:
         ok = _sync(t, client, wanted, now, use)
@@ -188,6 +198,7 @@ def sync_tv(t, active=None, use=True):
         return False
     finally:
         client.close()
+        _uploading.pop(t.id, None)
         _restart.discard(t.id)
         if getattr(client, "new_token", None) and t.token:
             log.info("%s gave Frame a new token; saved", t)
@@ -247,16 +258,23 @@ def _sync(t, client, wanted, now, use=True):
     # 2. Upload what's wanted but not there.
     placed = {pl.photo_id: pl.content_id for pl in placements if pl not in gone and pl not in missing}
     uploaded = []
-    for p in wanted:
-        if p.id in placed:
+    todo = [p for p in wanted if p.id not in placed]
+    if todo:
+        _uploading[t.id] = [0, len(todo)]
+    for p in todo:
+        try:
+            data = service.read_image(p)
+        except FileNotFoundError:  # deleted while this sync ran; it goes next pass
+            _uploading[t.id][1] -= 1
             continue
-        cid = client.upload(images.for_tv(service.read_image(p)))
+        cid = client.upload(images.for_tv(data))
         if not cid:
             raise tvlib.TVError("The TV didn't accept a photo")
         Placement.objects.create(photo=p, tv=t, content_id=cid, framed=True)
         placed[p.id] = cid
         on_tv.add(cid)
         uploaded.append(p)
+        _uploading[t.id][0] += 1
 
     # 3. Show a just-added photo right away (otherwise it waits its turn in the
     # slideshow), and never leave a photo that's no longer wanted on screen.
