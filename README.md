@@ -19,7 +19,7 @@ their slideshow, talking to the TVs directly over the LAN (samsungtvws, no Home 
 - Photos are resized to 4K JPEG on the hub before they go to a TV. Photos already on a TV that
   Frame didn't put there are left alone (shown as "unmanaged" on the admin page).
 - Deleting one of Frame's photos on a TV itself (with the remote) takes it off that TV only;
-  other TVs keep showing it. Once it has been deleted on every TV it was on, Frame deletes it.
+  other TVs keep showing it.
 
 ## Adding a TV
 

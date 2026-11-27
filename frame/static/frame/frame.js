@@ -10,6 +10,8 @@
   var uploads = [];            // [{progress, error}] while uploading
   var guestTvs = "all";        // guest: TVs for new photos
   var qrLoaded = "";
+  var sheetFor = null;         // admin: photo whose "…" sheet is open
+  var pendingDelete = [];      // admin: ids waiting on the delete confirmation
   // The hub's wall screen (wide, touch-only, like the hub keyboard's check) has no photos to pick.
   var mq = function (q) { return window.matchMedia && window.matchMedia(q).matches; };
   var onScreen = window.innerWidth >= 1280 && mq("(any-pointer: coarse)") && !mq("(any-hover: hover)");
@@ -157,9 +159,9 @@
     return h;
   }
 
-  function showQr(url, title, text) {
+  function showQr(url, title, text, near) {
     F.modal("<h3>" + esc(title) + "</h3><p>" + esc(text) + '</p><div class="fr-qr"><img alt="QR code" src="' + url +
-      '"></div><div class="fr-modal-actions"><button class="fr-btn" data-close>Done</button></div>');
+      '"></div><div class="fr-modal-actions"><button class="fr-btn" data-close>Done</button></div>', near);
   }
 
   // --- guests ------------------------------------------------------------------------
@@ -192,14 +194,38 @@
 
   // --- actions -----------------------------------------------------------------------
 
-  function confirmRemove(id) {
+  function confirmRemove(id, near) {
     var p = state.photos.filter(function (x) { return x.id === id; })[0];
     if (!p) return;
     F.modal('<div style="display:flex;gap:1rem;align-items:center"><div class="fr-tile" style="width:8rem;background-image:url(\'' +
       esc(p.thumb) + '\')"></div><div><h3>Remove this photo?</h3><p>It comes off every TV right away' +
       (p.kind === "guest" ? " and is deleted." : " and is deleted from the hub.") + "</p></div></div>" +
       '<div class="fr-modal-actions"><button class="fr-btn" data-close>Keep it</button><button class="fr-btn danger solid" data-confirm-remove="' +
-      esc(p.id) + '">Remove photo</button></div>');
+      esc(p.id) + '">Remove photo</button></div>', near);
+  }
+
+  // Admin "…" on a photo: which TVs show it, or delete it.
+  function photoSheet(id) {
+    var p = state.photos.filter(function (x) { return x.id === id; })[0];
+    sheetFor = null;
+    if (!p) { F.closeModal(); return; }
+    var near = root.querySelector('.fr-grid .fr-tile[data-photo="' + id + '"]');
+    F.modal('<div style="display:flex;gap:1rem;align-items:center"><div class="fr-tile" style="width:9rem;flex:none;background-image:url(\'' +
+      esc(p.thumb) + '\')"></div><div><h3>Show on</h3><div class="fr-chips">' +
+      F.chips(state.tvs, p.all_tvs ? "all" : p.tvs, "data-sheet-target") + "</div></div></div>" +
+      '<div class="fr-modal-actions"><button class="fr-btn danger" data-act="sheet-delete">Delete</button>' +
+      '<span style="flex:1"></span><button class="fr-btn" data-close>Done</button></div>', near);
+    sheetFor = id;
+  }
+
+  function confirmDelete(ids, near) {
+    var n = ids.length, one = n === 1;
+    pendingDelete = ids;
+    F.modal("<h3>Delete " + (one ? "this photo" : n + " photos") + "?</h3><p>" + (one ? "It comes" : "They come") +
+      " off every TV right away and " + (one ? "is" : "are") + " deleted from the hub. To take " + (one ? "it" : "them") +
+      " off just one TV, use Show on instead.</p>" +
+      '<div class="fr-modal-actions"><button class="fr-btn" data-close>Keep</button>' +
+      '<button class="fr-btn danger solid" data-act="delete-yes">Delete</button></div>', near);
   }
 
   function removePhotos(ids) {
@@ -241,14 +267,23 @@
     if (d.restart) { restart(d.restart); return; }
     if (d.remove) {
       e.stopPropagation();
-      if (state.role === "admin") { selected = {}; selected[d.remove] = true; render(); }
-      else confirmRemove(d.remove);
+      if (state.role === "admin") photoSheet(d.remove);
+      else confirmRemove(d.remove, el);
       return;
     }
     if (d.confirmRemove) { F.closeModal(); removePhotos([d.confirmRemove]); return; }
     if (d.photo && state.role === "admin") {
       if (selected[d.photo]) delete selected[d.photo]; else selected[d.photo] = true;
       render(); return;
+    }
+    if (d.sheetTarget && sheetFor) {
+      var sp = state.photos.filter(function (x) { return x.id === sheetFor; })[0], sid = sheetFor;
+      if (!sp) return;
+      var to = d.sheetTarget === "all" ? "all" : F.toggle(sp.all_tvs ? [] : sp.tvs, d.sheetTarget);
+      F.api(F.photoUrl(sid), { op: "tvs", tvs: to })
+        .then(load).then(function () { if (sheetFor === sid && !document.getElementById("fr-modal").hidden) photoSheet(sid); })
+        .catch(function (err) { F.toast(err.message, true); });
+      return;
     }
     if (d.target) {
       var ids = Object.keys(selected);
@@ -263,27 +298,28 @@
       case "upload": fileInput.click(); break;
       case "clear": selected = {}; render(); break;
       case "delete-sel":
-        var n = Object.keys(selected).length;
-        if (!n) break;
-        F.modal("<h3>Delete " + n + " photo" + (n === 1 ? "" : "s") + "?</h3><p>They come off every TV right away and are deleted from the hub.</p>" +
-          '<div class="fr-modal-actions"><button class="fr-btn" data-close>Keep</button>' +
-          '<button class="fr-btn danger solid" data-act="delete-sel-yes">Delete</button></div>');
+        if (Object.keys(selected).length) confirmDelete(Object.keys(selected), el);
         break;
-      case "delete-sel-yes":
+      case "sheet-delete":
+        if (sheetFor) confirmDelete([sheetFor], el);
+        break;
+      case "delete-yes":
         F.closeModal();
-        removePhotos(Object.keys(selected));
+        sheetFor = null;
+        removePhotos(pendingDelete);
+        pendingDelete = [];
         break;
       case "family-qr":
         showQr(root.dataset.qrUrl + "?for=family&t=" + Date.now(), "Add from your phone",
-          "Scan on the home Wi-Fi to upload family photos. The link works for 30 minutes.");
+          "Scan on the home Wi-Fi to upload family photos. The link works for 30 minutes.", el);
         break;
       case "guest-qr":
-        showQr(root.dataset.qrUrl + "?t=" + Date.now(), "Guests' QR code", "The link guests use to add photos during this stay.");
+        showQr(root.dataset.qrUrl + "?t=" + Date.now(), "Guests' QR code", "The link guests use to add photos during this stay.", el);
         break;
       case "end-stay":
         F.modal("<h3>End this guest stay now?</h3><p>Its photos are deleted for good and your photos go back on the TVs.</p>" +
           '<div class="fr-modal-actions"><button class="fr-btn" data-close>Keep it going</button>' +
-          '<button class="fr-btn danger solid" data-act="end-stay-yes">End stay</button></div>');
+          '<button class="fr-btn danger solid" data-act="end-stay-yes">End stay</button></div>', el);
         break;
       case "end-stay-yes":
         F.closeModal();
