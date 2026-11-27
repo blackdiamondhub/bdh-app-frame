@@ -77,8 +77,8 @@
   }
 
   function drawSheet(p) {
-    F.modal('<div style="display:flex;gap:1rem;align-items:center"><div class="fr-tile" style="width:7rem;flex:none;background-image:url(\'' +
-      esc(p.thumb) + '\')"></div><div><h3>Remove this photo?</h3><p>It comes off every TV right away.</p></div></div>' +
+    F.modal('<div style="display:flex;gap:1rem;align-items:center"><div class="fr-tile fr-zoom" data-view="' + esc(p.id) +
+      '" title="View bigger" style="width:7rem;flex:none;background-image:url(\'' + esc(p.thumb) + '\')"></div><div><h3>Remove this photo?</h3><p>It comes off every TV right away.</p></div></div>' +
       (state.tvs.length > 1 ? '<div class="fr-label">Shown on</div><div class="fr-chips">' + F.chips(state.tvs, sheet.tvs, "data-sheet-tv") + "</div>" : "") +
       '<button class="fr-btn danger solid block" data-act="remove">Remove photo</button>' +
       '<button class="fr-btn block" data-close>Keep it</button>');
@@ -114,6 +114,11 @@
     if (d.target) { target = F.toggle(target, d.target); render(); return; }
     if (d.interval) { changeInterval(d.interval); return; }
     if (d.restart) { restart(d.restart); return; }
+    if (d.view) {
+      var vp = state.photos.filter(function (x) { return x.id === d.view; })[0];
+      if (vp) F.viewer(vp, el);
+      return;
+    }
     if (d.photo) { e.stopPropagation(); openSheet(d.photo); return; }
     if (d.sheetTv && sheet) {
       sheet.tvs = F.toggle(sheet.tvs, d.sheetTv);

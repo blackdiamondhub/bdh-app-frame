@@ -20,6 +20,8 @@ their slideshow, talking to the TVs directly over the LAN (samsungtvws, no Home 
   Frame didn't put there are left alone (shown as "unmanaged" on the admin page).
 - Deleting one of Frame's photos on a TV itself (with the remote) takes it off that TV only;
   other TVs keep showing it.
+- To see a photo bigger, tap it in its sheet (the … on an admin tile, or tapping a photo on the guest
+  page), or double-click a tile on a computer. It shows letterboxed like the TV.
 
 ## Adding a TV
 

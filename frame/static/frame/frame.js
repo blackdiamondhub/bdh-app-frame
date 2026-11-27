@@ -5,6 +5,7 @@
   var view = document.getElementById("fr-view");
   var fileInput = document.getElementById("fr-file");
   var state = null;
+  var lastTap = {};
   var tab = "family";          // admin: family | guest
   var selected = {};           // admin: photo id -> true
   var uploads = [];            // [{progress, error}] while uploading
@@ -210,12 +211,18 @@
     sheetFor = null;
     if (!p) { F.closeModal(); return; }
     var near = root.querySelector('.fr-grid .fr-tile[data-photo="' + id + '"]');
-    F.modal('<div style="display:flex;gap:1rem;align-items:center"><div class="fr-tile" style="width:9rem;flex:none;background-image:url(\'' +
+    F.modal('<div style="display:flex;gap:1rem;align-items:center"><div class="fr-tile fr-zoom" data-view="' + esc(p.id) +
+      '" title="View bigger" style="width:9rem;flex:none;background-image:url(\'' +
       esc(p.thumb) + '\')"></div><div><h3>Show on</h3><div class="fr-chips">' +
       F.chips(state.tvs, p.all_tvs ? "all" : p.tvs, "data-sheet-target") + "</div></div></div>" +
       '<div class="fr-modal-actions"><button class="fr-btn danger" data-act="sheet-delete">Delete</button>' +
       '<span style="flex:1"></span><button class="fr-btn" data-close>Done</button></div>', near);
     sheetFor = id;
+  }
+
+  function viewPhoto(id, near) {
+    var p = state.photos.filter(function (x) { return x.id === id; })[0];
+    if (p) F.viewer(p, near);
   }
 
   function confirmDelete(ids, near) {
@@ -271,11 +278,19 @@
       else confirmRemove(d.remove, el);
       return;
     }
+    if (d.view) { viewPhoto(d.view, el); return; }
     if (d.confirmRemove) { F.closeModal(); removePhotos([d.confirmRemove]); return; }
     if (d.photo && state.role === "admin") {
+      // A tap selects, so a double tap/click opens it bigger. Each tap re-renders the grid, so the
+      // browser's own dblclick never fires: spot the second tap here and undo the first one.
+      var now = Date.now(), twice = lastTap.id === d.photo && now - lastTap.at < 400;
+      lastTap = twice ? {} : { id: d.photo, at: now };
       if (selected[d.photo]) delete selected[d.photo]; else selected[d.photo] = true;
-      render(); return;
+      render();
+      if (twice) viewPhoto(d.photo, root.querySelector('.fr-grid .fr-tile[data-photo="' + d.photo + '"]'));
+      return;
     }
+    if (d.photo) { viewPhoto(d.photo, el); return; }
     if (d.sheetTarget && sheetFor) {
       var sp = state.photos.filter(function (x) { return x.id === sheetFor; })[0], sid = sheetFor;
       if (!sp) return;

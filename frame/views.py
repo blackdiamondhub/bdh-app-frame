@@ -89,14 +89,15 @@ def _visible(who):
 
 # --- payloads ----------------------------------------------------------------------
 
-def _thumb_url(who, p):
+def _thumb_url(who, p, big=False):
     if who.secret:
-        return reverse("frame_guest_thumb", args=[who.secret, p.id])
-    return reverse("frame_thumb", args=[p.id])
+        return reverse("frame_guest_image" if big else "frame_guest_thumb", args=[who.secret, p.id])
+    return reverse("frame_image" if big else "frame_thumb", args=[p.id])
 
 
 def _photo(who, p, sent):
-    return {"id": p.id, "kind": p.kind, "thumb": _thumb_url(who, p), "all_tvs": p.all_tvs,
+    return {"id": p.id, "kind": p.kind, "thumb": _thumb_url(who, p),
+            "image": _thumb_url(who, p, big=True), "all_tvs": p.all_tvs,
             "tvs": [t.id for t in p.tvs.all()], "sent": sorted(sent.get(p.id, ())),
             "added": p.added_at.isoformat(), "portrait": p.height > p.width}
 
@@ -225,12 +226,13 @@ def _edit_photo(request, who, photo_id):
     return _error("Unknown op")
 
 
-def _thumb(who, photo_id):
+def _thumb(who, photo_id, big=False):
+    """The photo's thumbnail, or (``big``) the full photo for the viewer."""
     p = _visible(who).filter(id=photo_id).first()
     if p is None:
         raise Http404
     try:
-        with service.storage().open(p.thumb_name, "rb") as f:
+        with service.storage().open(p.image_name if big else p.thumb_name, "rb") as f:
             data = f.read()
     except OSError:
         raise Http404 from None
@@ -289,6 +291,11 @@ def api_photo(request, photo_id):
 @require_GET
 def thumb(request, photo_id):
     return _thumb(_who(request), photo_id)
+
+
+@require_GET
+def image(request, photo_id):
+    return _thumb(_who(request), photo_id, big=True)
 
 
 # --- admin: the stay ----------------------------------------------------------------
@@ -365,6 +372,14 @@ def guest_thumb(request, secret, photo_id):
     if who.role is None:
         raise Http404
     return _thumb(who, photo_id)
+
+
+@require_GET
+def guest_image(request, secret, photo_id):
+    who = _who_link(secret)
+    if who.role is None:
+        raise Http404
+    return _thumb(who, photo_id, big=True)
 
 
 # --- admin: the TVs page (hub Settings -> Frame TV -> TVs) ------------------------------
