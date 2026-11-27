@@ -37,8 +37,13 @@
 .fr-card-head .fr-grow { flex: 1; }
 
 .fr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: .9rem; }
-.fr-tile { position: relative; aspect-ratio: 16 / 10; border-radius: .7rem; overflow: hidden;
-           background: var(--fr-card2) center / cover no-repeat; border: 2px solid transparent; }
+.fr-tile { position: relative; aspect-ratio: 16 / 9; border-radius: .7rem; overflow: hidden; isolation: isolate;
+           background: var(--fr-card2) center / 0 0 no-repeat; border: 2px solid transparent; }
+/* Show photos as the TV does (images.for_tv): the whole photo, blurred darker copy at the sides. */
+.fr-tile::before, .fr-tile::after { content: ""; position: absolute; inset: 0; z-index: -1;
+           background-image: inherit; background-position: center; background-repeat: no-repeat; }
+.fr-tile::before { background-size: cover; filter: blur(8px) brightness(.55); transform: scale(1.15); }
+.fr-tile::after { background-size: contain; }
 .fr-tile.sel { border-color: var(--fr-accent); }
 .fr-tile .fr-x { position: absolute; top: .5rem; right: .5rem; width: 2rem; height: 2rem; border-radius: 50%;
                  border: 0; background: rgba(10, 14, 24, .8); }
@@ -130,8 +135,7 @@ html:has(body.fr-page), body.fr-page {
 .fr-add i { font-size: 1.8rem; }
 .fr-add b { display: block; font-size: 1.15rem; font-weight: 500; margin-top: .4rem; }
 .fr-add span { color: var(--fr-dim); font-size: .9rem; }
-.fr-phone .fr-grid { grid-template-columns: repeat(3, 1fr); gap: .5rem; }
-.fr-phone .fr-tile { aspect-ratio: 1; }
+.fr-phone .fr-grid { grid-template-columns: repeat(2, 1fr); gap: .5rem; }
 .fr-phone .fr-tile .fr-x { width: 1.7rem; height: 1.7rem; top: .3rem; right: .3rem; }
 .fr-phone .fr-tags { left: .3rem; bottom: .3rem; }
 .fr-phone .fr-tag { font-size: .65rem; }
