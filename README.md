@@ -14,6 +14,8 @@ their slideshow, talking to the TVs directly over the LAN (samsungtvws, no Home 
 - **After checkout**, at midnight (lodge time) after the checkout date, the stay's photos are
   permanently deleted from the hub and the TVs, and the guest link stops working. New guests
   arriving or owners arriving end the stay straight away, and admins can end it early.
+- Uploads can be JPEG, PNG or HEIC. The upload pages accept HEIC so that iPhones send their
+  originals instead of converting each photo to JPEG before the picker closes, which is slow.
 - Photos are resized to 4K JPEG on the hub before they go to a TV. Photos already on a TV that
   Frame didn't put there are left alone (shown as "unmanaged" on the admin page).
 

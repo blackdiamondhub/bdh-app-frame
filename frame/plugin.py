@@ -35,6 +35,7 @@ spec = PluginSpec(
     network=NETWORK_LAN,
     # Keeps the TVs in step with the photos and ends guest stays at midnight.
     lifecycle=LIFECYCLE_ALWAYS,
-    # Pillow holds a decoded 4K photo (~25 MB) while resizing an upload.
-    memory_mb=192,
+    # Pillow holds a decoded photo while resizing an upload: a 24 MP iPhone HEIC
+    # (no reduced-size decode like JPEG has) is ~72 MB.
+    memory_mb=256,
 )
