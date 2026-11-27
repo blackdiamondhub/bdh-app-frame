@@ -1,14 +1,5 @@
 from bdh_sdk import PluginSpec, Setting, SettingsPage, Tile
-from bdh_sdk.plugins import BOOL, CHOICE, LIFECYCLE_ALWAYS, MULTI, NETWORK_LAN
-
-MATTES = (
-    ("none", "No matte"),
-    ("modern_polar", "Modern, white"),
-    ("modern_black", "Modern, black"),
-    ("shadowbox_polar", "Shadowbox, white"),
-    ("shadowbox_black", "Shadowbox, black"),
-    ("flexible_polar", "Flexible, white"),
-)
+from bdh_sdk.plugins import BOOL, LIFECYCLE_ALWAYS, MULTI, NETWORK_LAN
 
 spec = PluginSpec(
     id="frame",
@@ -22,7 +13,6 @@ spec = PluginSpec(
     settings=(
         # How often the TVs change photo is set in the app itself (anyone using it can).
         Setting("shuffle", "Shuffle", type=BOOL, default=True),
-        Setting("matte", "Matte for new photos", type=CHOICE, default="none", choices=MATTES),
         Setting("guest_uploads", "Guests can add photos during their stay", type=BOOL, default=True,
                 help="Family photos come off the TVs during guest stays either way."),
         Setting("skip_tvs", "Leave these TVs alone", type=MULTI, default=None,

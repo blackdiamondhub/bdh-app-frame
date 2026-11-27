@@ -49,8 +49,12 @@ class FakeTV:
             raise tvlib.TVError(self.tv["fail"])
         return set(self.tv["photos"])
 
-    def upload(self, data, matte="none"):
-        Image.open(io.BytesIO(data)).verify()
+    def upload(self, data):
+        # The TV only ever gets exactly 16:9 at panel size, with no matte: a matted
+        # non-16:9 photo crashes the real TV's art app (error 40000).
+        img = Image.open(io.BytesIO(data))
+        assert img.size == images.TV_SIZE, f"sent {img.size}, not the panel's 16:9"
+        img.verify()
         self.tv["n"] += 1
         cid = f"MY_F{self.tv['n']:04d}"
         self.tv["photos"].append(cid)
@@ -267,6 +271,22 @@ class SyncTests(Base):
         service.set_targets(p, None)  # put back on every TV from the app
         sync.sync_all()
         self.assertEqual(len(FakeTV.tvs[a.host]["photos"]), 3)
+
+    def test_photos_sent_before_framing_are_sent_again(self):
+        """Photos uploaded by older versions (maybe with a matte) are replaced by framed ones."""
+        t = self.tv(photos=("MY_F0001", "MY_F0050"), current="MY_F0050")
+        old, = self.family(1)
+        Placement.objects.create(photo=old, tv=t, content_id="MY_F0050")  # framed=False
+        sync.sync_tv(t)
+        fake = FakeTV.tvs[t.host]
+        self.assertNotIn("MY_F0050", fake["photos"])
+        pl = Placement.objects.get(tv=t)
+        self.assertTrue(pl.framed)
+        self.assertIn(pl.content_id, fake["photos"])
+        self.assertEqual(fake["current"], pl.content_id)
+        fake["log"].clear()
+        sync.sync_tv(t)
+        self.assertEqual(fake["log"], ["list", "status"])
 
     def test_reset_tv_gets_everything_back(self):
         t = self.tv()
@@ -632,6 +652,21 @@ class ImageTests(SimpleTestCase):
     def test_garbage(self):
         with self.assertRaises(images.BadImage):
             images.prepare(b"not a photo")
+
+    def test_for_tv_frames_portrait_with_blurred_sides(self):
+        out = images.for_tv(jpeg(1080, 1440, color=(200, 100, 50)))
+        img = Image.open(io.BytesIO(out))
+        self.assertEqual(img.size, images.TV_SIZE)
+        self.assertEqual(img.format, "JPEG")
+        mid, side = img.getpixel((1920, 1080)), img.getpixel((50, 1080))
+        self.assertTrue(all(abs(a - b) < 12 for a, b in zip(mid, (200, 100, 50))), mid)
+        self.assertLess(sum(side), sum(mid) * 0.75)  # darkened copy, not black bars or the photo
+        self.assertGreater(sum(side), 60)
+
+    def test_for_tv_fills_the_panel_with_16_9_and_small_photos(self):
+        for size in ((3840, 2160), (1672, 941), (300, 200)):
+            img = Image.open(io.BytesIO(images.for_tv(jpeg(*size))))
+            self.assertEqual(img.size, images.TV_SIZE, size)
 
 
 class IntervalTests(Base):

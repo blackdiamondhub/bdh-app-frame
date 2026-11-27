@@ -147,7 +147,6 @@ def _state(request, who):
     if who.role == ADMIN:
         out["settings"] = {
             "shuffle": service.flag("shuffle", True),
-            "matte": str(service.setting("matte", "none")),
         }
     if who.role is not None:
         out["interval"] = service.interval()

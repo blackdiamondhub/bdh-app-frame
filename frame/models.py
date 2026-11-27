@@ -89,6 +89,8 @@ class Placement(models.Model):
     photo = models.ForeignKey(Photo, null=True, on_delete=models.SET_NULL, related_name="placements")
     tv = models.ForeignKey(TV, on_delete=models.CASCADE, related_name="placements")
     content_id = models.CharField(max_length=40)
+    # Sent as a 16:9 framed photo with no matte. Older ones (maybe matted) get re-sent.
+    framed = models.BooleanField(default=False)
     added_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
