@@ -148,8 +148,6 @@
     state.tvs.forEach(function (t) {
       h += '<div class="fr-tv"><div class="fr-tv-art"></div><div class="fr-tv-main"><div class="fr-tv-name">' + esc(t.name) +
         '</div><div class="fr-tv-sub">' + tvStatus(t) + " · " + esc(t.host) + "</div>" +
-        (t.unmanaged ? '<div class="fr-tv-sub">' + t.unmanaged + " other photo" + (t.unmanaged === 1 ? "" : "s") +
-          " in My Photos (not from Frame; left alone, and guests can see them)</div>" : "") +
         "</div>" + F.play(t) + "</div>";
     });
     if (root.dataset.tvsUrl) h += '<a class="fr-btn fr-pairlink" target="_top" href="/apps/frame' + esc(root.dataset.tvsUrl) +
