@@ -103,7 +103,8 @@ def _photo(who, p, sent):
 
 
 def _tv(t, admin):
-    d = {"id": t.id, "name": t.name, "online": t.online, "paired": bool(t.token)}
+    d = {"id": t.id, "name": t.name, "online": t.online, "paired": bool(t.token),
+         "uploading": sync.uploading(t.id)}
     if admin:
         d.update(host=t.host, model=t.model, pairing=sync.pair_waiting(t.id), error=t.error,
                  unmanaged=t.unmanaged, last_sync=t.last_sync.isoformat() if t.last_sync else None)
@@ -393,7 +394,7 @@ def _tv_row(t, skip):
     return {"id": t.id, "name": t.name, "host": t.host, "model": t.model, "online": t.online,
             "paired": bool(t.token), "left_alone": not discovery.enabled(t, skip), "error": t.error,
             "last_seen": t.last_seen.isoformat() if t.last_seen else None,
-            "pair": sync.pair_status(t.id)}
+            "pair": sync.pair_status(t.id), "uploading": sync.uploading(t.id)}
 
 
 def _tvs_data():
