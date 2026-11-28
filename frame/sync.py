@@ -160,14 +160,20 @@ def _mark(t, **fields):
 def sync_tv(t, active=None, use=True):
     """Sync one TV; returns True if it is now up to date. ``use=False`` empties it."""
     try:
-        if not tvlib.describe(t.host)["on"]:
-            _synced.pop(t.id, None)  # it may lose its slideshow while off: check it all when it's back
-            _mark(t, online=False)
-            return False
+        d = tvlib.describe(t.host)
     except tvlib.Offline:
         _synced.pop(t.id, None)
-        _mark(t, online=False)
+        if t.online:
+            _mark(t, online=False)
         return False
+    if d.get("mac") and d["mac"] != t.mac:
+        _mark(t, mac=d["mac"])
+    if not d["on"]:
+        _synced.pop(t.id, None)  # it may lose its slideshow while off: check it all when it's back
+        _mark(t, online=False, asleep=True)
+        return False
+    if t.asleep:
+        _mark(t, asleep=False)
     now = timezone.now()
     if not t.token:
         _mark(t, online=True, last_seen=now, error="Not paired")
@@ -260,7 +266,8 @@ def _sync(t, client, wanted, now, use=True):
     uploaded = []
     todo = [p for p in wanted if p.id not in placed]
     if todo:
-        _uploading[t.id] = [0, len(todo)]
+        # Counted against everything the TV gets, so a resumed sync doesn't look like a fresh start.
+        _uploading[t.id] = [len(wanted) - len(todo), len(wanted)]
     for p in todo:
         try:
             data = service.read_image(p)

@@ -106,6 +106,38 @@
     return u ? "Sending photos (" + u.done + " of " + u.total + ")\u2026" : "";
   }
 
+  // A TV's power button, left of play: green when the TV is on. Off means standby;
+  // a TV Frame can't reach (unplugged) gets a greyed-out button.
+  function power(t) {
+    var on = t.power === "on", busy = !!t.powering;
+    return '<button class="fr-power' + (on ? " on" : "") + (busy ? " busy" : "") + '" data-power="' + t.id +
+      '" data-on="' + (on ? "0" : "1") + '"' + (t.can_power && !busy ? "" : " disabled") +
+      ' aria-label="Turn ' + esc(t.name) + (on ? " off" : " on") + '"><i class="fas fa-power-off"></i></button>';
+  }
+
+  // "Turning on…", why it didn't work, or "" (for the TV's status line).
+  function powerNote(t) {
+    if (t.powering) return "Turning " + t.powering + "\u2026";
+    return t.power_error || "";
+  }
+
+  function switchPower(tvs, id, on, redraw) {
+    var t = tvs.filter(function (x) { return String(x.id) === String(id); })[0];
+    if (!t) return Promise.resolve();
+    t.powering = on ? "on" : "off";
+    t.power_error = "";
+    redraw();
+    return api(root.dataset.powerUrl, { tv: Number(id), on: on })
+      .then(function () { toast("Turning " + t.name + (on ? " on" : " off") + (on ? " (can take a minute)" : "")); })
+      .catch(function (e) { t.powering = null; redraw(); toast(e.message, true); });
+  }
+
+  // While a TV is turning on/off, check back every few seconds.
+  function followPower(tvs, reload) {
+    clearTimeout(followPower._t);
+    if ((tvs || []).some(function (t) { return t.powering; })) followPower._t = setTimeout(reload, 3000);
+  }
+
   function tvNames(photo, tvs) {
     if (photo.all_tvs) return ["All TVs"];
     var byId = {};
@@ -190,7 +222,8 @@
 
   window.Frame = {
     root: root, esc: esc, toast: toast, api: api, photoUrl: photoUrl, uploadAll: uploadAll,
-    tvNames: tvNames, play: play, upload: upload, sending: sending, day: day, chips: chips, toggle: toggle,
+    tvNames: tvNames, play: play, upload: upload, power: power, powerNote: powerNote, switchPower: switchPower,
+    followPower: followPower, sending: sending, day: day, chips: chips, toggle: toggle,
     modal: modal, closeModal: closeModal, viewer: viewer,
   };
 })();

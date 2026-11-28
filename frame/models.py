@@ -23,6 +23,13 @@ class TV(models.Model):
     model = models.CharField(max_length=80, blank=True)
     # The token the TV issued when someone pressed Allow; empty = not paired yet.
     token = models.CharField(max_length=255, blank=True)
+    # IP Control's token (port 1516, for turning the TV off and on); empty = not set up.
+    ip_token = models.CharField(max_length=255, blank=True)
+    # For Wake-on-LAN, from the TV's /api/v2/.
+    mac = models.CharField(max_length=17, blank=True)
+    # Last seen in standby (or turned off by Frame): a TV that then stops answering is
+    # asleep, not unplugged, so it can still be turned on.
+    asleep = models.BooleanField(default=False)
     online = models.BooleanField(default=False)
     last_seen = models.DateTimeField(null=True, blank=True)
     last_sync = models.DateTimeField(null=True, blank=True)

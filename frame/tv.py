@@ -6,6 +6,7 @@ can swap in a fake with :func:`set_factory`.
 import logging
 import socket
 import threading
+import time
 
 import requests
 
@@ -65,7 +66,182 @@ def describe(host):
         "model": str(d.get("modelName") or ""),
         "frame": str(d.get("FrameTVSupport", "")).lower() == "true",
         "on": str(d.get("PowerState", "on")).lower() == "on",
+        # Despite the name, the MAC of whichever network the TV is on (wired too).
+        "mac": str(d.get("wifiMac") or "").lower()[:17],
     }
+
+
+# --- power -----------------------------------------------------------------------------
+#
+# 2024+ Frames treat the websocket power key as "Art Mode <-> TV" (2025 ones always do),
+# so Frame turns TVs off and on through Samsung's IP Control instead: JSON-RPC over
+# HTTPS on port 1516, on once "IP Remote" is turned on in the TV's Expert Settings.
+# A TV that has been off a while stops answering on the network; a Wake-on-LAN
+# packet brings that back. TVs without IP Control fall back to the power key.
+
+IP_PORT = 1516
+#: How long turning a TV on may take (a sleeping TV's network takes ~a minute to wake).
+POWER_ON_WAIT = 90
+POWER_OFF_WAIT = 20
+#: The TV's answer to powerOn whether or not it worked ("Server error", data "Failed").
+_IP_ON_REPLY = -32002
+
+
+def _ip_rpc(host, method, params=None, timeout=10):
+    import http.client
+    import json
+    import ssl
+
+    body = {"jsonrpc": "2.0", "id": 1, "method": method}
+    if params:  # the TV rejects an empty "params" (HTTP 400)
+        body["params"] = params
+    raw = json.dumps(body, separators=(",", ":")).encode()
+    conn = http.client.HTTPSConnection(host, IP_PORT, timeout=timeout, context=ssl._create_unverified_context())
+    try:
+        conn.request("POST", "/", raw, {"Content-Type": "application/json", "Accept": "application/json",
+                                         "Content-Length": str(len(raw))})
+        resp = conn.getresponse()
+        text = resp.read().decode("utf-8", "replace")
+    except TimeoutError:
+        raise
+    except OSError as exc:
+        raise Offline(str(exc) or type(exc).__name__) from exc
+    finally:
+        conn.close()
+    try:
+        return json.loads(text)
+    except ValueError:
+        raise TVError(f"IP Control answered {resp.status}") from None
+
+
+def ip_pair(host):
+    """Ask the TV for an IP Control token; returns it once someone presses Allow.
+
+    The TV only asks while it's showing TV (not Art Mode). Raises :class:`Offline`
+    when IP Remote is off, :class:`PairTimeout` or :class:`PairDenied` otherwise.
+    """
+    try:
+        reply = _ip_rpc(host, "createAccessToken", timeout=PAIR_TIMEOUT)
+    except TimeoutError as exc:
+        raise PairTimeout("Nobody pressed Allow") from exc
+    token = ((reply or {}).get("result") or {}).get("AccessToken")
+    if not token:
+        raise PairDenied(str((reply or {}).get("error") or "The TV didn't give Frame a token"))
+    return str(token)
+
+
+def _ip_power(host, ip_token, power):
+    """Send ``powerOn``/``powerOff``. A stale token raises :class:`NotPaired`."""
+    try:
+        reply = _ip_rpc(host, "powerControl", {"AccessToken": ip_token, "power": power})
+    except TimeoutError as exc:
+        raise Offline("The TV didn't answer") from exc
+    err = (reply or {}).get("error") or (reply if "code" in (reply or {}) else None)
+    if err and err.get("code") == -32700:  # what this firmware says for a missing/stale token
+        raise NotPaired("The TV no longer accepts Frame's power-control token")
+    if err and not (power == "powerOn" and err.get("code") == _IP_ON_REPLY):
+        raise TVError(f"The TV said {err.get('message') or err}")
+
+
+def wake_on_lan(host, mac):
+    """Wake a TV whose network has gone to sleep."""
+    try:
+        packet = b"\xff" * 6 + bytes.fromhex(mac.replace(":", "").replace("-", "")) * 16
+    except ValueError:
+        return
+    targets = ["255.255.255.255"]
+    if host.count(".") == 3:
+        targets.append(host.rsplit(".", 1)[0] + ".255")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        for target in targets:
+            try:
+                s.sendto(packet, (target, 9))
+            except OSError:
+                pass
+
+
+def _state(host):
+    """True on, False standby, None not answering."""
+    try:
+        return describe(host)["on"]
+    except Offline:
+        return None
+
+
+def _power_key(host, token, hold):
+    from samsungtvws import SamsungTVWS
+
+    tv = SamsungTVWS(host, port=8002, token=token or None, name=CLIENT_NAME, timeout=TIMEOUT)
+    try:
+        if hold:
+            tv.hold_key("KEY_POWER", 3)
+        else:
+            tv.shortcuts().power()
+    except Exception as exc:  # noqa: BLE001
+        raise TVError(str(exc) or type(exc).__name__) from exc
+    finally:
+        try:
+            tv.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _wait(host, on, seconds):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if _state(host) is on:
+            return True
+        time.sleep(2)
+    return False
+
+
+def power_off(host, token="", ip_token=""):
+    """Put the TV in standby. Raises :class:`TVError` (or :class:`NotPaired` for a stale
+    IP Control token) if it can't."""
+    st = _state(host)
+    if st is None:
+        raise Offline("Frame can't reach the TV")
+    if st is False:
+        return
+    if ip_token:
+        _ip_power(host, ip_token, "powerOff")
+    elif token:
+        _power_key(host, token, hold=True)
+    else:
+        raise NotPaired("Frame isn't paired with the TV")
+    if not _wait(host, False, POWER_OFF_WAIT):
+        raise TVError("The TV didn't turn off")
+
+
+def power_on(host, token="", ip_token="", mac=""):
+    """Wake the TV up. Raises :class:`TVError` if it isn't on within :data:`POWER_ON_WAIT`."""
+    end = time.monotonic() + POWER_ON_WAIT
+    keyed = 0.0
+    while time.monotonic() < end:
+        st = _state(host)
+        if st:
+            return
+        if st is None and mac:
+            wake_on_lan(host, mac)
+        if st is False:  # answering: ask it to turn on
+            if ip_token:
+                try:
+                    _ip_power(host, ip_token, "powerOn")
+                except Offline:
+                    pass
+            elif token and time.monotonic() - keyed > 15:
+                # The power key toggles, so press it once and give the TV time.
+                keyed = time.monotonic()
+                try:
+                    _power_key(host, token, hold=False)
+                except TVError:
+                    pass
+            elif not token:
+                raise NotPaired("Frame isn't paired with the TV")
+        if _wait(host, True, 5):
+            return
+    raise TVError("The TV didn't turn on" if mac or st is not None else "Frame can't reach the TV")
 
 
 class FrameClient:

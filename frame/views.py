@@ -12,7 +12,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from bdh_sdk.auth import is_admin
 
-from . import discovery, images, service, sync, tv as tvlib, worker
+from . import discovery, images, power, service, sync, tv as tvlib, worker
 from .models import FAMILY, GUEST, TV, GuestStay, Photo, Placement
 
 log = logging.getLogger(__name__)
@@ -104,11 +104,17 @@ def _photo(who, p, sent):
 
 def _tv(t, admin):
     d = {"id": t.id, "name": t.name, "online": t.online, "paired": bool(t.token),
-         "uploading": sync.uploading(t.id)}
+         "uploading": sync.uploading(t.id), **_power(t)}
     if admin:
         d.update(host=t.host, model=t.model, pairing=sync.pair_waiting(t.id), error=t.error,
                  unmanaged=t.unmanaged, last_sync=t.last_sync.isoformat() if t.last_sync else None)
     return d
+
+
+def _power(t):
+    """The power button's state: ``power`` on/standby/offline, ``can_power``, ``powering`` on/off/None."""
+    return {"power": power.state(t), "can_power": power.can(t), "powering": power.pending(t.id),
+            "power_error": power.failed(t.id)}
 
 
 def _link(request, stay):
@@ -284,6 +290,30 @@ def api_restart(request):
     return _restart(_who(request), request)
 
 
+def _switch(who, request):
+    """Anyone who can use the app may turn a TV off (standby) or back on."""
+    if who.role is None:
+        return _error("Changing the TVs isn't open right now", 403)
+    data = _body(request) or {}
+    tv, on = data.get("tv"), data.get("on")
+    if isinstance(tv, bool) or not isinstance(tv, int) or not isinstance(on, bool):
+        return _error("Pick a TV, and on or off")
+    t = next((x for x in discovery.usable_tvs() if x.id == tv), None)
+    if t is None:
+        return _error("That TV is gone", 404)
+    if not power.can(t):
+        return _error("Frame can't reach " + t.name + " right now" if t.token or t.ip_token
+                      else t.name + " isn't set up yet", 409)
+    if not power.request(t, on):
+        return _error(t.name + " is already turning " + (power.pending(t.id) or ("on" if on else "off")), 409)
+    return JsonResponse({"ok": True, **_power(t)})
+
+
+@require_POST
+def api_power(request):
+    return _switch(_who(request), request)
+
+
 @require_POST
 def api_photo(request, photo_id):
     return _edit_photo(request, _who(request), photo_id)
@@ -360,6 +390,14 @@ def guest_restart(request, secret):
 
 
 @require_POST
+def guest_power(request, secret):
+    who = _who_link(secret)
+    if who.role is None:
+        return _error("This link has expired", 404)
+    return _switch(who, request)
+
+
+@require_POST
 def guest_photo(request, secret, photo_id):
     who = _who_link(secret)
     if who.role is None:
@@ -394,7 +432,8 @@ def _tv_row(t, skip):
     return {"id": t.id, "name": t.name, "host": t.host, "model": t.model, "online": t.online,
             "paired": bool(t.token), "left_alone": not discovery.enabled(t, skip), "error": t.error,
             "last_seen": t.last_seen.isoformat() if t.last_seen else None,
-            "pair": sync.pair_status(t.id), "uploading": sync.uploading(t.id)}
+            "pair": sync.pair_status(t.id), "uploading": sync.uploading(t.id),
+            "ip_paired": bool(t.ip_token), "ip_pair": power.ip_pair_status(t.id), **_power(t)}
 
 
 def _tvs_data():
@@ -428,6 +467,17 @@ def api_tv_pair(request, tv_id):
     if t.token:
         return _error("Frame is already paired with this TV")
     sync.pair_now(t)
+    return JsonResponse(_tvs_data())
+
+
+@require_POST
+def api_tv_power_pair(request, tv_id):
+    """Ask the TV for a power-control (IP Control) token; the page polls for the answer."""
+    _admin_only(request)
+    t = TV.objects.filter(id=tv_id).first()
+    if t is None:
+        return _error("That TV is gone", 404)
+    power.ip_pair_now(t)
     return JsonResponse(_tvs_data())
 
 

@@ -22,6 +22,7 @@
       state = s;
       document.getElementById("fr-loading").hidden = true;
       render();
+      F.followPower(state.tvs, load);
     }).catch(function (e) { F.toast(e.message, true); });
   }
 
@@ -62,6 +63,8 @@
     if (!t.paired) return t.pairing
       ? '<span class="fr-dot warn"></span>Press <b>Allow</b> on the TV'
       : '<span class="fr-dot warn"></span>Not paired yet · Frame asks again when it\'s on';
+    var note = F.powerNote(t);
+    if (note) return '<span class="fr-dot' + (t.powering ? " warn" : " bad") + '"></span>' + esc(note);
     if (!t.online) return '<span class="fr-dot"></span>Off · photos go up when it\'s on';
     if (t.uploading) return '<span class="fr-dot ok"></span>' + F.upload(t);
     if (t.error) return '<span class="fr-dot bad"></span>' + esc(t.error);
@@ -148,9 +151,7 @@
     state.tvs.forEach(function (t) {
       h += '<div class="fr-tv"><div class="fr-tv-art"></div><div class="fr-tv-main"><div class="fr-tv-name">' + esc(t.name) +
         '</div><div class="fr-tv-sub">' + tvStatus(t) + " · " + esc(t.host) + "</div>" +
-        (t.unmanaged ? '<div class="fr-tv-sub">' + t.unmanaged + " other photo" + (t.unmanaged === 1 ? "" : "s") +
-          " in My Photos (not from Frame; left alone, and guests can see them)</div>" : "") +
-        "</div>" + F.play(t) + "</div>";
+        "</div>" + F.power(t) + F.play(t) + "</div>";
     });
     if (root.dataset.tvsUrl) h += '<a class="fr-btn fr-pairlink" target="_top" href="/apps/frame' + esc(root.dataset.tvsUrl) +
       '"><i class="fas fa-link"></i> Pair a TV</a>';
@@ -180,12 +181,14 @@
     var tiles = uploadTiles() + state.photos.map(function (p) { return tile(p, {}); }).join("");
     h += tiles ? '<div class="fr-grid">' + tiles + "</div>" : '<div class="fr-empty">No photos yet. Scan the code to add some from your phone.</div>';
     h += '<div class="fr-tvcards">' + state.tvs.map(function (t) {
-      var st = !t.online ? '<span class="fr-dot"></span>Off · photos go up when it\'s on'
+      var note = F.powerNote(t);
+      var st = note ? '<span class="fr-dot' + (t.powering ? " warn" : " bad") + '"></span>' + esc(note)
+        : !t.online ? '<span class="fr-dot"></span>Off · photos go up when it\'s on'
         : t.uploading ? '<span class="fr-dot ok"></span>' + F.upload(t)
         : t.paired ? '<span class="fr-dot ok"></span>Art Mode' + (state.photos.length ? " · showing your photos" : "")
           : '<span class="fr-dot warn"></span>Not set up';
       return '<div class="fr-tv"><div class="fr-tv-art"></div><div class="fr-tv-main"><div class="fr-tv-name">' + esc(t.name) +
-        '</div><div class="fr-tv-sub">' + st + "</div></div>" + F.play(t) + "</div>";
+        '</div><div class="fr-tv-sub">' + st + "</div></div>" + F.power(t) + F.play(t) + "</div>";
     }).join("") + "</div>" + intervalHtml() + "</section></div>";
     return h;
   }
@@ -274,6 +277,7 @@
     if (d.tab) { tab = d.tab; selected = {}; render(); return; }
     if (d.interval) { changeInterval(d.interval); return; }
     if (d.restart) { restart(d.restart); return; }
+    if (d.power) { F.switchPower(state.tvs, d.power, d.on === "1", render).then(load); return; }
     if (d.remove) {
       e.stopPropagation();
       if (state.role === "admin") photoSheet(d.remove);

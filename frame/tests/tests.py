@@ -15,7 +15,7 @@ from PIL import Image
 
 from bdh_sdk.storage import set_state_backend
 from bdh_sdk.testing import assert_plugin_importable
-from frame import discovery, images, service, stay, sync, tv as tvlib, views, worker
+from frame import discovery, images, power, service, stay, sync, tv as tvlib, views, worker
 from frame.models import FAMILY, GUEST, TV, GuestStay, Photo, Placement
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -142,6 +142,10 @@ class Base(TestCase):
         p5 = patch("frame.sync._close_db")
         p5.start()
         self.addCleanup(p5.stop)
+        power.reset()
+        p6 = patch("frame.power._start", side_effect=lambda fn, *args: fn(*args))  # switch inline
+        p6.start()
+        self.addCleanup(p6.stop)
 
     def tv(self, host="192.168.11.138", **kw):
         make_fake_tv(host, **kw)
@@ -215,6 +219,16 @@ class SyncTests(Base):
         self.assertEqual([s[1] for s in seen], [{"done": i, "total": 3} for i in range(3)])
         self.assertEqual([s[2] for s in seen], [s[1] for s in seen])
         self.assertIsNone(sync.uploading(t.id))
+
+    def test_resumed_sync_counts_photos_already_on_the_tv(self):
+        t = self.tv()
+        self.family(2)
+        sync.sync_tv(t)
+        self.family(1)
+        seen = []
+        FakeTV.tvs[t.host]["on_upload"] = lambda: seen.append(sync.uploading(t.id))
+        sync.sync_tv(t)
+        self.assertEqual(seen, [{"done": 2, "total": 3}])
 
     def test_failed_upload_clears_progress(self):
         t = self.tv()
@@ -797,6 +811,202 @@ class IntervalTests(Base):
         self.assertEqual(self.post(reverse("frame_interval"), "3").status_code, 403)
         self.assertNotIn("interval", self.c.get(reverse("frame_state")).json())
         self.assertEqual(self.post(reverse("frame_guest_interval", args=["nope"]), "3").status_code, 404)
+
+
+class PowerTests(Base):
+    """The power button: off means standby; Frame wakes a TV it saw asleep."""
+
+    def setUp(self):
+        super().setUp()
+        self.admin = get_user_model().objects.create_user("stefan", password="x", is_staff=True)
+        self.c = Client()
+        self.lr = self.tv()
+        p = patch("frame.service.wake_worker")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def post(self, url, **body):
+        return self.c.post(url, json.dumps(body), content_type="application/json")
+
+    def row(self, tv_id):
+        return next(t for t in self.c.get(reverse("frame_state")).json()["tvs"] if t["id"] == tv_id)
+
+    def test_guest_turns_a_tv_off_and_back_on(self):
+        TV.objects.filter(id=self.lr.id).update(online=True, ip_token="ip-tok", mac="00:11:22:33:44:55")
+        url = reverse("frame_power")
+        with patch("frame.tv.power_off") as off, patch("frame.tv.power_on") as on:
+            self.assertEqual(self.post(url, tv=self.lr.id, on=False).status_code, 403)  # wall screen, no stay
+            self.hub_stay = cur()
+            gs = service.evaluate()
+            self.assertEqual(self.post(url, tv=self.lr.id, on=False).status_code, 200)
+            off.assert_called_once_with(self.lr.host, "tok", "ip-tok")
+            self.lr.refresh_from_db()
+            self.assertEqual((self.lr.online, self.lr.asleep), (False, True))
+            self.assertEqual(self.row(self.lr.id)["power"], "standby")
+            g = reverse("frame_guest_power", args=[gs.link_secret])
+            self.assertEqual(self.post(g, tv=self.lr.id, on=True).status_code, 200)
+            on.assert_called_once_with(self.lr.host, "tok", "ip-tok", "00:11:22:33:44:55")
+            self.assertEqual(self.post(reverse("frame_guest_power", args=["nope"]), tv=self.lr.id, on=True).status_code, 404)
+        self.lr.refresh_from_db()
+        self.assertEqual((self.lr.online, self.lr.asleep), (True, False))
+        r = self.row(self.lr.id)
+        self.assertEqual((r["power"], r["can_power"], r["powering"], r["power_error"]), ("on", True, None, ""))
+        for bad in ({"tv": self.lr.id}, {"tv": True, "on": True}, {"tv": str(self.lr.id), "on": True},
+                    {"tv": self.lr.id, "on": "yes"}):
+            self.assertEqual(self.post(url, **bad).status_code, 400, bad)
+        self.assertEqual(self.post(url, tv=999, on=True).status_code, 404)
+
+    def test_unreachable_tv_is_greyed_out_unless_frame_saw_it_asleep(self):
+        self.hub_stay = cur()
+        service.evaluate()
+        TV.objects.filter(id=self.lr.id).update(online=False, asleep=False)
+        self.assertEqual((self.row(self.lr.id)["power"], self.row(self.lr.id)["can_power"]), ("offline", False))
+        with patch("frame.tv.power_on") as on:
+            self.assertEqual(self.post(reverse("frame_power"), tv=self.lr.id, on=True).status_code, 409)
+        on.assert_not_called()
+        TV.objects.filter(id=self.lr.id).update(asleep=True)
+        self.assertEqual((self.row(self.lr.id)["power"], self.row(self.lr.id)["can_power"]), ("standby", True))
+
+    def test_a_failure_shows_under_the_tv(self):
+        self.hub_stay = cur()
+        service.evaluate()
+        TV.objects.filter(id=self.lr.id).update(online=False, asleep=True)
+        with patch("frame.tv.power_on", side_effect=tvlib.TVError("The TV didn't turn on")):
+            self.assertEqual(self.post(reverse("frame_power"), tv=self.lr.id, on=True).status_code, 200)
+        r = self.row(self.lr.id)
+        self.assertEqual((r["power_error"], r["powering"], r["power"]), ("The TV didn't turn on", None, "standby"))
+
+    def test_a_stale_ip_token_falls_back_to_the_power_key(self):
+        TV.objects.filter(id=self.lr.id).update(online=True, ip_token="old")
+        self.lr.refresh_from_db()
+        calls = []
+
+        def off(host, token, ip_token):
+            calls.append(ip_token)
+            if ip_token:
+                raise tvlib.NotPaired("stale")
+        with patch("frame.tv.power_off", side_effect=off):
+            self.assertTrue(power.request(self.lr, False))
+        self.assertEqual(calls, ["old", ""])
+        self.lr.refresh_from_db()
+        self.assertEqual((self.lr.ip_token, self.lr.asleep), ("", True))
+
+    def test_sync_notes_standby_and_the_mac(self):
+        desc = {"uid": "u", "name": "Living Room", "model": "QN55", "frame": True, "on": False,
+                "mac": "4c:57:39:07:43:a7"}
+        TV.objects.filter(id=self.lr.id).update(online=True)
+        self.lr.refresh_from_db()
+        with patch("frame.tv.describe", return_value=desc):
+            sync.sync_tv(self.lr)
+        self.lr.refresh_from_db()
+        self.assertEqual((self.lr.online, self.lr.asleep, self.lr.mac), (False, True, "4c:57:39:07:43:a7"))
+        with patch("frame.tv.describe", side_effect=tvlib.Offline("gone")):
+            sync.sync_tv(self.lr)  # a TV asleep a while drops off the network: still wakeable
+        self.lr.refresh_from_db()
+        self.assertEqual((self.lr.online, self.lr.asleep), (False, True))
+        with patch("frame.tv.describe", return_value={**desc, "on": True}):
+            sync.sync_tv(self.lr)
+        self.lr.refresh_from_db()
+        self.assertEqual((self.lr.online, self.lr.asleep), (True, False))
+
+    def test_admin_sets_up_power_control(self):
+        url = reverse("frame_tv_power_pair", args=[self.lr.id])
+        self.assertEqual(self.c.post(url).status_code, 403)
+        self.c.force_login(self.admin)
+        r = self.c.get(reverse("frame_tvs"))
+        self.assertContains(r, "IP Remote")
+        for exc, state in ((tvlib.PairTimeout("slow"), "timeout"), (tvlib.PairDenied("no"), "denied"),
+                           (tvlib.Offline("refused"), "offline")):
+            power.reset()
+            with patch("frame.tv.ip_pair", side_effect=exc):
+                row = next(t for t in self.c.post(url).json()["tvs"] if t["id"] == self.lr.id)
+            self.assertEqual((row["ip_pair"]["state"], row["ip_paired"]), (state, False))
+        power.reset()
+        with patch("frame.tv.ip_pair", return_value="ip-tok"):
+            row = next(t for t in self.c.post(url).json()["tvs"] if t["id"] == self.lr.id)
+        self.assertEqual((row["ip_pair"]["state"], row["ip_paired"]), ("paired", True))
+        self.lr.refresh_from_db()
+        self.assertEqual(self.lr.ip_token, "ip-tok")
+
+
+class IpControlTests(SimpleTestCase):
+    """The TV side of power: Samsung IP Control on port 1516."""
+
+    def rpc(self, replies):
+        sent = []
+
+        class Conn:
+            def __init__(self, host, port, timeout=None, context=None):
+                self.port = port
+
+            def request(self, method, path, body, headers):
+                sent.append(json.loads(body))
+                self.body = body
+
+            def getresponse(self):
+                r = replies.pop(0)
+                if isinstance(r, BaseException):
+                    raise r
+
+                class Resp:
+                    status = 200
+
+                    def read(self):
+                        return json.dumps(r).encode()
+                return Resp()
+
+            def close(self):
+                pass
+        return sent, patch("http.client.HTTPSConnection", Conn)
+
+    def test_no_empty_params(self):
+        """The TV answers HTTP 400 to ``"params": {}``."""
+        sent, p = self.rpc([{"result": {"AccessToken": "t" * 49}}])
+        with p:
+            self.assertEqual(tvlib.ip_pair("10.0.0.9"), "t" * 49)
+        self.assertNotIn("params", sent[0])
+        self.assertEqual(sent[0]["method"], "createAccessToken")
+
+    def test_pairing_outcomes(self):
+        sent, p = self.rpc([TimeoutError("timed out"), {"error": {"code": -1, "message": "no"}},
+                            ConnectionRefusedError("refused")])
+        with p:
+            self.assertRaises(tvlib.PairTimeout, tvlib.ip_pair, "h")
+            self.assertRaises(tvlib.PairDenied, tvlib.ip_pair, "h")
+            self.assertRaises(tvlib.Offline, tvlib.ip_pair, "h")  # IP Remote off
+
+    def test_power_replies(self):
+        sent, p = self.rpc([{"jsonrpc": "2.0", "id": 1, "error": {"code": -32002, "message": "Server error"}},
+                            {"code": -32700, "message": "Parse error"},
+                            {"error": {"code": -32002, "message": "Server error"}}])
+        with p:
+            tvlib._ip_power("h", "tok", "powerOn")  # what it always says, even when it works
+            self.assertRaises(tvlib.NotPaired, tvlib._ip_power, "h", "stale", "powerOff")
+            self.assertRaises(tvlib.TVError, tvlib._ip_power, "h", "tok", "powerOff")
+        self.assertEqual(sent[0]["params"], {"AccessToken": "tok", "power": "powerOn"})
+
+    def test_power_on_wakes_a_tv_that_dropped_off_the_network(self):
+        with patch("frame.tv._state", side_effect=[None, False]), \
+                patch("frame.tv._wait", side_effect=[False, True]), \
+                patch("frame.tv.wake_on_lan") as wol, patch("frame.tv._ip_power") as ip:
+            tvlib.power_on("10.0.0.9", "tok", "ip", "00:7d:3b:0a:bc:8f")
+        wol.assert_called_once_with("10.0.0.9", "00:7d:3b:0a:bc:8f")
+        ip.assert_called_once_with("10.0.0.9", "ip", "powerOn")
+
+    def test_power_off_of_an_unreachable_tv_says_so(self):
+        with patch("frame.tv._state", return_value=None):
+            self.assertRaises(tvlib.Offline, tvlib.power_off, "h", "tok", "ip")
+        with patch("frame.tv._state", return_value=False), patch("frame.tv._ip_power") as ip:
+            tvlib.power_off("h", "tok", "ip")  # already in standby
+        ip.assert_not_called()
+
+    def test_wake_on_lan_packet(self):
+        with patch("socket.socket") as sock:
+            tvlib.wake_on_lan("192.168.10.174", "00:7d:3b:0a:bc:8f")
+        s = sock.return_value.__enter__.return_value
+        packet, (target, port) = s.sendto.call_args_list[-1][0]
+        self.assertEqual((target, port, len(packet)), ("192.168.10.255", 9, 102))
+        self.assertEqual(packet[6:12], bytes.fromhex("007d3b0abc8f"))
 
 
 class PairingTests(Base):

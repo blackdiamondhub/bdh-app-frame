@@ -9,7 +9,7 @@
   var state = null, uploads = [], target = "all", sheet = null;
 
   function load() {
-    return F.api(root.dataset.stateUrl).then(function (s) { state = s; render(); }).catch(function (e) {
+    return F.api(root.dataset.stateUrl).then(function (s) { state = s; render(); F.followPower(state.tvs, load); }).catch(function (e) {
       if (e.status === 404) { window.location.reload(); return; }  // stay over: the page says so
       F.toast(e.message, true);
     });
@@ -47,9 +47,11 @@
     }
     if (state.tvs.length) {
       h += '<div class="fr-label">TVs</div>' + state.tvs.map(function (t) {
+        var note = F.powerNote(t);
         return '<div class="fr-tv"><div class="fr-tv-main"><div class="fr-tv-name">' + esc(t.name) + '</div><div class="fr-tv-sub">' +
-          (!t.online ? '<span class="fr-dot"></span>Off' : t.uploading ? '<span class="fr-dot ok"></span>' + F.upload(t)
-            : '<span class="fr-dot ok"></span>On') + "</div></div>" + F.play(t) + "</div>";
+          (note ? '<span class="fr-dot' + (t.powering ? " warn" : " bad") + '"></span>' + esc(note)
+            : !t.online ? '<span class="fr-dot"></span>Off' : t.uploading ? '<span class="fr-dot ok"></span>' + F.upload(t)
+            : '<span class="fr-dot ok"></span>On') + "</div></div>" + F.power(t) + F.play(t) + "</div>";
       }).join("");
     }
     view.innerHTML = h;
@@ -115,6 +117,7 @@
     if (d.target) { target = F.toggle(target, d.target); render(); return; }
     if (d.interval) { changeInterval(d.interval); return; }
     if (d.restart) { restart(d.restart); return; }
+    if (d.power) { F.switchPower(state.tvs, d.power, d.on === "1", render).then(load); return; }
     if (d.view) {
       var vp = state.photos.filter(function (x) { return x.id === d.view; })[0];
       if (vp) F.viewer(vp, el);

@@ -18,8 +18,9 @@
     .ft-steps li { margin: 10px 0; line-height: 1.45; }
     .ft-steps small, .ft-tip { display: block; color: var(--mut); font-size: 13px; margin-top: 3px; }
     .ft-path { font-weight: 500; }
-    #ft-result { margin: 14px 0 0; padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,.05); display: none; line-height: 1.45; }
-    #ft-result.show { display: block; }
+    #ft-result, #fp-result { margin: 14px 0 0; padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,.05); display: none; line-height: 1.45; }
+    #ft-result.show, #fp-result.show { display: block; }
+    .ft-row .ctl { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
     .ft-count { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 10px; }
     .ft-foot { border-top: 1px solid var(--line); padding: 14px 22px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .ft-foot .sp { flex: 1; }
@@ -64,12 +65,39 @@
     </div>
 </div>
 
+<div class="ft-modal" id="fp-modal" role="dialog" aria-modal="true" aria-labelledby="fp-title">
+    <div class="ft-box">
+        <header id="fp-title">Set up power control</header>
+        <div class="ft-body">
+            <p style="margin:0;color:var(--mut)">So the power buttons can really turn this TV off and back on. Do this once, at the TV, with its remote:</p>
+            <ol class="ft-steps">
+                <li><b>Turn on IP Remote.</b> On the TV go to
+                    <span class="ft-path">Settings → All Settings → Connection → Network → Expert Settings</span>
+                    and turn <b>IP Remote</b> on. While you're there, make sure <b>Power On with Mobile</b> is on too.</li>
+                <li><b>Leave the TV on its normal TV screen</b> (press Home or the TV button). Not Art Mode and not the screen saver: the TV only asks from the normal screen.</li>
+                <li><b>Press Ask the TV below,</b> then press <b>Allow</b> on the TV within <span id="fp-secs"></span> seconds.</li>
+            </ol>
+            <div id="fp-result" class="ft-result" aria-live="polite"></div>
+        </div>
+        <div class="ft-foot">
+            <span class="sp"></span>
+            <button type="button" class="hst-btn ghost" id="fp-close">Close</button>
+            <button type="button" class="hst-btn" id="fp-ask">Ask the TV</button>
+        </div>
+    </div>
+</div>
+
 {{ data|json_script:"ft-data" }}
 <script>
 (function () {
     const STATE_URL = "{% url 'frame_tvs_state' %}";
     const SCAN_URL = "{% url 'frame_tvs_scan' %}";
     const PAIR_URL = "{% url 'frame_tv_pair' 0 %}";
+    const POWER_PAIR_URL = "{% url 'frame_tv_power_pair' 0 %}";
+    const pmodal = document.getElementById('fp-modal');
+    const presult = document.getElementById('fp-result');
+    const pask = document.getElementById('fp-ask');
+    let powering = null;  // the TV id the power-control box is open for
     const csrf = document.querySelector('[name=csrfmiddlewaretoken]').value;
     const list = document.getElementById('ft-list');
     const modal = document.getElementById('ft-modal');
@@ -81,6 +109,15 @@
     let timer = null;
 
     document.getElementById('ft-secs').textContent = data.pair_seconds;
+    document.getElementById('fp-secs').textContent = data.pair_seconds;
+
+    const PRESULTS = {
+        paired: ['ft-ok', 'Power control is set up. The power buttons now turn this TV fully off and on.'],
+        denied: ['ft-bad', 'The TV said no. Ask again and press Allow.'],
+        timeout: ['ft-warn', 'Nobody pressed Allow in time. If no box appeared, the TV was probably in Art Mode or the screen saver (step 2). Then ask again.'],
+        offline: ['ft-bad', "The TV didn't answer. Check IP Remote is on (step 1) and the TV is on, then ask again."],
+        failed: ['ft-bad', "That didn't work: "],
+    };
 
     const RESULTS = {
         paired: ['ft-ok', 'Paired. Frame puts the photos on this TV within a minute.'],
@@ -108,6 +145,12 @@
         return ['ft-ok', 'Paired · on'];
     }
 
+    function powerStatus(t) {
+        if (t.left_alone || !t.paired) return null;
+        if (t.ip_pair && t.ip_pair.state === 'waiting') return ['ft-warn', 'Power control: press Allow on the TV'];
+        return t.ip_paired ? ['ft-ok', 'Power control \u2713'] : ['', 'Power control not set up'];
+    }
+
     function render() {
         list.replaceChildren();
         scan.disabled = data.looking;
@@ -122,6 +165,8 @@
             const [cls, text] = status(t);
             const sub = el('small', '', [t.host, t.model].filter(Boolean).join(' \u00b7 ') + ' \u00b7 ');
             sub.append(el('span', cls, text));
+            const ps = powerStatus(t);
+            if (ps) { sub.append(' \u00b7 '); sub.append(el('span', ps[0], ps[1])); }
             lbl.append(sub);
             const ctl = el('div', 'ctl');
             if (!t.paired && !t.left_alone) {
@@ -129,11 +174,57 @@
                 b.type = 'button';
                 b.addEventListener('click', () => open(t));
                 ctl.append(b);
+            } else if (ps && !t.ip_paired) {
+                const b = el('button', 'hst-btn ghost', 'Set up power control');
+                b.type = 'button';
+                b.addEventListener('click', () => openPower(t));
+                ctl.append(b);
             }
             row.append(lbl, ctl);
             list.append(row);
         }
         if (pairing !== null) renderPairing();
+        if (powering !== null) renderPower();
+    }
+
+    function renderPower() {
+        const t = tv(powering);
+        if (!t) { closePower(); return; }
+        document.getElementById('fp-title').textContent = 'Set up power control: ' + t.name;
+        const p = t.ip_pair;
+        presult.replaceChildren();
+        presult.className = '';
+        pask.disabled = false;
+        pask.textContent = 'Ask the TV';
+        if (t.ip_paired) {
+            presult.className = 'show';
+            presult.append(el('span', PRESULTS.paired[0], PRESULTS.paired[1]));
+            pask.hidden = true;
+            return;
+        }
+        pask.hidden = false;
+        if (!p) return;
+        presult.className = 'show';
+        if (p.state === 'waiting') {
+            pask.disabled = true;
+            pask.textContent = 'Asking\u2026';
+            presult.append(el('span', 'ft-count', String(p.seconds_left)),
+                           el('span', '', 'Press Allow on the TV now.'));
+            return;
+        }
+        const [cls, text] = PRESULTS[p.state] || PRESULTS.failed;
+        presult.append(el('span', cls, text + (p.state === 'failed' || !PRESULTS[p.state] ? p.message : '')));
+    }
+
+    function openPower(t) {
+        powering = t.id;
+        pmodal.classList.add('open');
+        render();
+    }
+
+    function closePower() {
+        powering = null;
+        pmodal.classList.remove('open');
     }
 
     function tv(id) { return data.tvs.find(t => t.id === id); }
@@ -194,7 +285,9 @@
     function schedule() {
         clearTimeout(timer);
         const t = pairing !== null && tv(pairing);
-        const busy = data.looking || (t && t.pair && t.pair.state === 'waiting');
+        const pt = powering !== null && tv(powering);
+        const busy = data.looking || (t && t.pair && t.pair.state === 'waiting') ||
+                     (pt && pt.ip_pair && pt.ip_pair.state === 'waiting');
         timer = setTimeout(refresh, busy ? 1000 : 10000);
     }
 
@@ -208,6 +301,14 @@
         try { data = await call(SCAN_URL, 'POST'); render(); } catch (e) { /* the list says */ }
         schedule();
     });
+    pask.addEventListener('click', async () => {
+        pask.disabled = true;
+        try { data = await call(POWER_PAIR_URL.replace('/0/', '/' + powering + '/'), 'POST'); render(); }
+        catch (e) { presult.className = 'show'; presult.replaceChildren(el('span', 'ft-bad', e.message)); pask.disabled = false; }
+        schedule();
+    });
+    document.getElementById('fp-close').addEventListener('click', closePower);
+    pmodal.addEventListener('click', e => { if (e.target === pmodal) closePower(); });
     document.getElementById('ft-close').addEventListener('click', close);
     modal.addEventListener('click', e => { if (e.target === modal) close(); });
 

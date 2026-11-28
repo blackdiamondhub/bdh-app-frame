@@ -156,6 +156,14 @@ html:has(body.fr-page), body.fr-page {
 .fr-play { flex: none; width: 2.6rem; height: 2.6rem; border-radius: 50%; border: 1px solid var(--fr-line);
            background: var(--fr-card); color: inherit; display: grid; place-items: center; cursor: pointer; }
 .fr-play:disabled { opacity: .35; cursor: default; }
+.fr-power { flex: none; width: 2.6rem; height: 2.6rem; border-radius: 50%; border: 1px solid var(--fr-line);
+            background: var(--fr-card); color: inherit; display: grid; place-items: center; cursor: pointer;
+            margin-right: .5rem; transition: color .2s, box-shadow .2s, border-color .2s; }
+.fr-power.on { color: #5fd38a; border-color: rgba(95, 211, 138, .6); box-shadow: 0 0 .7rem rgba(95, 211, 138, .45); }
+.fr-power.busy { animation: fr-power-pulse 1.2s ease-in-out infinite; }
+.fr-power:disabled { cursor: default; }
+.fr-power:disabled:not(.busy) { opacity: .35; }
+@keyframes fr-power-pulse { 50% { opacity: .4; } }
 .fr-interval { margin-top: 1rem; display: flex; flex-direction: column; gap: .5rem; }
 .fr-interval > span { color: var(--fr-mut, inherit); font-size: .9rem; }
 .fr-pairlink { display: inline-flex; align-items: center; gap: .4rem; margin-top: .75rem; text-decoration: none; }
