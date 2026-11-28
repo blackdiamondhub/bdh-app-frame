@@ -16,7 +16,10 @@ log = logging.getLogger(__name__)
 CLIENT_NAME = "BDH Frame"
 MY_PHOTOS = "MY-C0002"
 TIMEOUT = 15
-PAIR_TIMEOUT = 45
+#: How long to wait while the TV shows its Allow prompt (when pairing, or when a paired TV
+#: asks again) before giving up for now.
+ALLOW_WAIT = 60
+PAIR_TIMEOUT = ALLOW_WAIT
 #: Longest one request to a TV may take. samsungtvws waits for its reply with no overall
 #: limit, so a TV that drops a reply (seen mid-upload) would otherwise hang the worker for good.
 CALL_DEADLINE = 60
@@ -285,14 +288,20 @@ class FrameClient:
         if self._art is None:
             from samsungtvws import SamsungTVWS
 
+            # Open with room for someone to press Allow, then go back to the normal timeout.
             tv = SamsungTVWS(self.host, port=8002, token=self.token or None, name=CLIENT_NAME,
-                             timeout=TIMEOUT)
+                             timeout=ALLOW_WAIT)
             self._art = tv.art()
+            self._art.open()
+            self._art.timeout = TIMEOUT
+            if self._art.connection is not None:
+                self._art.connection.settimeout(TIMEOUT)
         return self._art
 
     def _call(self, fn, *args, deadline=None, **kw):
         self._expired = False
-        timer = threading.Timer(deadline or CALL_DEADLINE, self._abort)
+        limit = (deadline or CALL_DEADLINE) + (ALLOW_WAIT if self._art is None else 0)
+        timer = threading.Timer(limit, self._abort)
         timer.daemon = True
         timer.start()
         try:

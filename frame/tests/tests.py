@@ -1183,6 +1183,42 @@ class TileTests(Base):
 
 
 class TokenTests(SimpleTestCase):
+    def test_open_waits_long_enough_to_press_allow(self):
+        """Opening waits ALLOW_WAIT (someone may be walking to the remote); after that each
+        call uses the normal timeout."""
+        seen = {}
+
+        class Conn:
+            def settimeout(self, t):
+                seen["sock"] = t
+
+        class Art:
+            token = "tok"
+            connection = None
+
+            def __init__(self, timeout):
+                self.timeout = timeout
+
+            def open(self):
+                seen["open"] = self.timeout
+                self.connection = Conn()
+
+            def get_artmode(self):
+                seen["call"] = self.timeout
+                return "on"
+
+        class WS:
+            def __init__(self, host, **kw):
+                self.kw = kw
+
+            def art(self):
+                return Art(self.kw["timeout"])
+
+        with patch("samsungtvws.SamsungTVWS", WS):
+            self.assertTrue(tvlib.FrameClient("10.0.0.1", "tok").art_mode())
+        self.assertEqual(tvlib.ALLOW_WAIT, 60)
+        self.assertEqual(seen, {"open": tvlib.ALLOW_WAIT, "call": tvlib.TIMEOUT, "sock": tvlib.TIMEOUT})
+
     def test_client_notices_a_new_token(self):
         class Art:
             token = "tok"
