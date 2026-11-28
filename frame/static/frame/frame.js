@@ -65,6 +65,8 @@
       : '<span class="fr-dot warn"></span>Not paired yet · Frame asks again when it\'s on';
     var note = F.powerNote(t);
     if (note) return '<span class="fr-dot' + (t.powering ? " warn" : " bad") + '"></span>' + esc(note);
+    if (t.pairing) return '<span class="fr-dot warn"></span>Press <b>Allow</b> on the TV';
+    if (t.asking_allow) return '<span class="fr-dot warn"></span>Press <b>Allow</b> on the TV';
     if (!t.online) return '<span class="fr-dot"></span>Off · photos go up when it\'s on';
     if (t.uploading) return '<span class="fr-dot ok"></span>' + F.upload(t);
     if (t.error) return '<span class="fr-dot bad"></span>' + esc(t.error);

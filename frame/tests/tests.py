@@ -46,7 +46,8 @@ class FakeTV:
     def my_photos(self):
         self.tv["log"].append("list")
         if self.tv.get("fail"):
-            raise tvlib.TVError(self.tv["fail"])
+            f = self.tv["fail"]
+            raise f if isinstance(f, Exception) else tvlib.TVError(f)
         return set(self.tv["photos"])
 
     def upload(self, data):
@@ -126,6 +127,7 @@ class Base(TestCase):
         p3.start()
         self.addCleanup(p3.stop)
         sync._pair_tries.clear()
+        sync._asking.clear()
         sync._pair_status.clear()
         sync._synced.clear()
         sync._restart.clear()
@@ -1082,6 +1084,46 @@ class PairingTests(Base):
             with self.assertRaises(tvlib.Standby):
                 tvlib.pair("192.168.10.124")
 
+    def test_a_tv_asking_to_allow_is_left_alone_not_asked_every_pass(self):
+        """Each connection puts the Allow prompt up again: one ask, then wait (or Ask again)."""
+        TV.objects.filter(id=self.office.id).update(token="tok")
+        self.office.refresh_from_db()
+        fake = FakeTV.tvs["192.168.10.124"]
+        fake["fail"] = tvlib.WaitingForAllow("Connection timed out")
+        sync.sync_tv(self.office)
+        for _ in range(3):
+            sync.sync_tv(self.office)
+        self.assertEqual(fake["log"].count("list"), 1)
+        self.office.refresh_from_db()
+        self.assertEqual((self.office.token, self.office.error), ("tok", sync.ALLOW_ERROR))
+        self.c.force_login(self.admin)
+        row = self.office_row(self.c.get(reverse("frame_tvs_state")).json())
+        self.assertTrue(row["asking_allow"])
+        self.assertTrue(self.c.get(reverse("frame_state")).json()["tvs"][0]["asking_allow"])
+        # Ask again: a fresh pairing, whose token replaces the old one.
+        r = self.pair(lambda host: "tok-2")
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(self.office_row(r.json())["asking_allow"])
+        self.office.refresh_from_db()
+        self.assertEqual(self.office.token, "tok-2")
+        del fake["fail"]
+        sync.sync_tv(self.office)
+        self.assertEqual(fake["log"].count("list"), 2)
+
+    def test_tries_again_after_the_wait(self):
+        TV.objects.filter(id=self.office.id).update(token="tok")
+        self.office.refresh_from_db()
+        fake = FakeTV.tvs["192.168.10.124"]
+        fake["fail"] = tvlib.WaitingForAllow("timed out")
+        sync.sync_tv(self.office)
+        del fake["fail"]  # someone pressed Allow
+        sync._asking[self.office.id] -= sync.PAIR_RETRY
+        sync.sync_tv(self.office)
+        self.assertEqual(fake["log"].count("list"), 2)
+        self.assertFalse(sync.asking_allow(self.office.id))
+        self.office.refresh_from_db()
+        self.assertEqual(self.office.error, "")
+
     def test_look_now(self):
         self.c.force_login(self.admin)
         with patch("frame.worker.poke") as poke:
@@ -1157,6 +1199,32 @@ class TokenTests(SimpleTestCase):
         c2._art = type("Same", (), {"token": "tok", "get_artmode": lambda self: "on"})()
         c2.art_mode()
         self.assertIsNone(c2.new_token)
+
+    def test_no_answer_while_opening_is_the_allow_prompt(self):
+        """A TV showing its Allow prompt never sends ms.channel.connect: the open times out,
+        or the TV sends some other event first. Once connected, a timeout is just a timeout."""
+        class WebSocketTimeoutException(Exception):
+            pass
+
+        class ConnectionFailure(Exception):
+            pass
+
+        def art(exc, connection=None):
+            def boom(self):
+                raise exc
+            return type("Art", (), {"token": "tok", "connection": connection, "get_artmode": boom,
+                                    "close": lambda self: None})()
+
+        for exc in (WebSocketTimeoutException("Connection timed out"), TimeoutError("timed out"),
+                    ConnectionFailure({"event": "d2d_service_message"})):
+            c = tvlib.FrameClient("10.0.0.1", "tok")
+            c._art = art(exc)
+            self.assertRaises(tvlib.WaitingForAllow, c.art_mode)
+        c = tvlib.FrameClient("10.0.0.1", "tok")
+        c._art = art(WebSocketTimeoutException("Connection timed out"), connection=object())
+        with self.assertRaises(tvlib.TVError) as cm:
+            c.art_mode()
+        self.assertNotIsInstance(cm.exception, tvlib.WaitingForAllow)
 
 
 class PluginTests(SimpleTestCase):

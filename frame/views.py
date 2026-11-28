@@ -104,7 +104,7 @@ def _photo(who, p, sent):
 
 def _tv(t, admin):
     d = {"id": t.id, "name": t.name, "online": t.online, "paired": bool(t.token),
-         "uploading": sync.uploading(t.id), **_power(t)}
+         "uploading": sync.uploading(t.id), "asking_allow": sync.asking_allow(t.id), **_power(t)}
     if admin:
         d.update(host=t.host, model=t.model, pairing=sync.pair_waiting(t.id), error=t.error,
                  unmanaged=t.unmanaged, last_sync=t.last_sync.isoformat() if t.last_sync else None)
@@ -433,6 +433,7 @@ def _tv_row(t, skip):
             "paired": bool(t.token), "left_alone": not discovery.enabled(t, skip), "error": t.error,
             "last_seen": t.last_seen.isoformat() if t.last_seen else None,
             "pair": sync.pair_status(t.id), "uploading": sync.uploading(t.id),
+            "asking_allow": sync.asking_allow(t.id),
             "ip_paired": bool(t.ip_token), "ip_pair": power.ip_pair_status(t.id), **_power(t)}
 
 
@@ -464,7 +465,7 @@ def api_tv_pair(request, tv_id):
     t = TV.objects.filter(id=tv_id).first()
     if t is None:
         return _error("That TV is gone", 404)
-    if t.token:
+    if t.token and not sync.asking_allow(t.id):
         return _error("Frame is already paired with this TV")
     sync.pair_now(t)
     return JsonResponse(_tvs_data())

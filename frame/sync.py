@@ -24,6 +24,9 @@ PAIR_RESULT_FOR = 10 * 60
 RECHECK = 10 * 60
 
 _pair_tries = {}  # tv id -> time.monotonic() of the last ask
+_asking = {}  # tv id -> time.monotonic() a paired TV answered with its Allow prompt
+#: Shown under a paired TV that put up its Allow prompt for Frame.
+ALLOW_ERROR = "The TV is asking to allow BDH Frame"
 _pair_status = {}  # tv id -> {"state", "message", "at"}
 _pair_lock = threading.Lock()
 _synced = {}  # tv id -> (fingerprint, time.monotonic()) of the last good sync
@@ -50,6 +53,12 @@ def restart_slideshows(tv_id=None):
 #: Pairing states shown on the TVs page.
 WAITING, PAIRED, DENIED, TIMEOUT, STANDBY, OFFLINE, FAILED = (
     "waiting", "paired", "denied", "timeout", "standby", "offline", "failed")
+
+
+def asking_allow(tv_id):
+    """True while a paired TV is waiting on its Allow prompt (Frame stays away meanwhile)."""
+    asked = _asking.get(tv_id)
+    return asked is not None and time.monotonic() - asked < PAIR_RETRY
 
 
 def pair_waiting(tv_id):
@@ -100,6 +109,7 @@ def _pair(tv_id, host):
         finally:
             _close_db()
         _set_pair_status(tv_id, PAIRED)
+        _asking.pop(tv_id, None)
         log.info("TV %s at %s paired", tv_id, host)
         service.wake_worker()
         return
@@ -180,6 +190,10 @@ def sync_tv(t, active=None, use=True):
         if use:
             maybe_pair(t)
         return False
+    asked = _asking.get(t.id)
+    if asked is not None and time.monotonic() - asked < PAIR_RETRY:
+        _mark(t, online=True, last_seen=now)  # leave it alone: each try puts the prompt up again
+        return False
     wanted = service.wanted_on(t, active) if use else []
     fp = _fingerprint(t, wanted, use)
     last = _synced.get(t.id)
@@ -197,6 +211,12 @@ def sync_tv(t, active=None, use=True):
         _mark(t, online=True, last_seen=now, token="", error="The TV stopped allowing Frame; it will ask again")
         log.warning("%s unpaired: %s", t, exc)
         return False
+    except tvlib.WaitingForAllow as exc:
+        _synced.pop(t.id, None)
+        _asking[t.id] = time.monotonic()
+        _mark(t, online=True, last_seen=now, error=ALLOW_ERROR)
+        log.warning("%s is asking to allow Frame (%s); trying again in %d min", t, exc, PAIR_RETRY // 60)
+        return False
     except tvlib.TVError as exc:
         _synced.pop(t.id, None)
         _mark(t, online=True, last_seen=now, error=str(exc)[:250])
@@ -212,6 +232,7 @@ def sync_tv(t, active=None, use=True):
             t.token = client.new_token
     wanted = service.wanted_on(t, active) if use else []
     _synced[t.id] = (_fingerprint(t, wanted, use), time.monotonic())
+    _asking.pop(t.id, None)
     return ok
 
 
