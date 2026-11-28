@@ -139,6 +139,7 @@
         if (t.left_alone) return ['', 'Left alone'];
         if (t.pair && t.pair.state === 'waiting') return ['ft-warn', 'Waiting for someone to press Allow on the TV'];
         if (!t.paired) return ['ft-warn', 'Not paired'];
+        if (t.asking_allow) return ['ft-warn', 'The TV is asking to allow BDH Frame. Press Allow on the TV, or Ask again'];
         if (!t.online) return ['', 'Off · photos go up when it\u2019s on'];
         if (t.uploading) return ['ft-ok', 'Sending photos (' + t.uploading.done + ' of ' + t.uploading.total + ')\u2026'];
         if (t.error) return ['ft-bad', t.error];
@@ -169,8 +170,8 @@
             if (ps) { sub.append(' \u00b7 '); sub.append(el('span', ps[0], ps[1])); }
             lbl.append(sub);
             const ctl = el('div', 'ctl');
-            if (!t.paired && !t.left_alone) {
-                const b = el('button', 'hst-btn', 'Pair');
+            if ((!t.paired || t.asking_allow) && !t.left_alone) {
+                const b = el('button', 'hst-btn', t.paired ? 'Ask again' : 'Pair');
                 b.type = 'button';
                 b.addEventListener('click', () => open(t));
                 ctl.append(b);
@@ -238,7 +239,7 @@
         result.className = '';
         ask.disabled = false;
         ask.textContent = 'Ask the TV';
-        if (t.paired) {
+        if (t.paired && !t.asking_allow) {
             result.className = 'show';
             result.append(el('span', RESULTS.paired[0], RESULTS.paired[1]));
             ask.hidden = true;

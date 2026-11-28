@@ -39,6 +39,14 @@ class Standby(TVError):
     """The TV answers but its screen is off; it only asks to allow Frame when it's on."""
 
 
+class WaitingForAllow(TVError):
+    """The TV is on but didn't let Frame in: it's showing an Allow prompt for BDH Frame.
+
+    Frame keeps its token (the TV takes it back once someone presses Allow) but
+    mustn't reconnect every pass: each try puts the prompt up again.
+    """
+
+
 class PairDenied(NotPaired):
     """Someone pressed Deny, or the TV is set to block new devices."""
 
@@ -244,6 +252,13 @@ def power_on(host, token="", ip_token="", mac=""):
     raise TVError("The TV didn't turn on" if mac or st is not None else "Frame can't reach the TV")
 
 
+def _asking(exc):
+    """While a TV shows its Allow prompt, opening the channel times out, or the TV
+    sends some other event (d2d_service_message) instead of ms.channel.connect."""
+    return (isinstance(exc, TimeoutError) or "timed out" in str(exc).lower()
+            or type(exc).__name__ in ("WebSocketTimeoutException", "ConnectionFailure"))
+
+
 class FrameClient:
     """One TV's art channel. Not thread-safe; the worker owns it."""
 
@@ -286,12 +301,15 @@ class FrameClient:
             raise
         except Exception as exc:  # noqa: BLE001 - websocket, socket and protocol errors
             self._grab_token()
+            connected = getattr(self._art, "connection", None) is not None
             self.close()
             if self._expired:
                 raise TVError("The TV stopped answering") from exc
             text = str(exc)
             if "unauthorized" in text.lower() or "ms.channel.unauthorized" in text:
                 raise NotPaired(text) from exc
+            if not connected and _asking(exc):
+                raise WaitingForAllow(text or type(exc).__name__) from exc
             raise TVError(text or type(exc).__name__) from exc
         finally:
             timer.cancel()

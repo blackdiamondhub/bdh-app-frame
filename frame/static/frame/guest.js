@@ -50,6 +50,7 @@
         var note = F.powerNote(t);
         return '<div class="fr-tv"><div class="fr-tv-main"><div class="fr-tv-name">' + esc(t.name) + '</div><div class="fr-tv-sub">' +
           (note ? '<span class="fr-dot' + (t.powering ? " warn" : " bad") + '"></span>' + esc(note)
+            : t.asking_allow ? '<span class="fr-dot warn"></span>Press <b>Allow</b> on the TV'
             : !t.online ? '<span class="fr-dot"></span>Off' : t.uploading ? '<span class="fr-dot ok"></span>' + F.upload(t)
             : '<span class="fr-dot ok"></span>On') + "</div></div>" + F.power(t) + F.play(t) + "</div>";
       }).join("");
